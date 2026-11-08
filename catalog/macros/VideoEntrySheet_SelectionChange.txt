@@ -1,0 +1,10 @@
+' Paste ALL of this into: VBA Project → Microsoft Excel Objects → VideoEntry
+' (Delete any old code in that window first.)
+' Then Save.
+
+Option Explicit
+
+Private Sub Worksheet_SelectionChange(ByVal Target As Range)
+    On Error Resume Next
+    CatalogMacros.HandleEntryOptionClick Me, Target
+End Sub
