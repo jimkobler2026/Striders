@@ -4,7 +4,16 @@ Media catalog and notes for water strider biology, with a focus on behavior and 
 
 ## Catalog workbook
 
-[`catalog/Strider_Media_Catalog.xlsm`](catalog/Strider_Media_Catalog.xlsm)
+**Which file to open**
+
+| File | Role |
+|---|---|
+| [`catalog/Strider_Media_Catalog.xlsm`](catalog/Strider_Media_Catalog.xlsm) | **Working copy** — day-to-day catalog (macros + your rows) |
+| [`catalog/Strider_Media_Catalog_blank.xlsm`](catalog/Strider_Media_Catalog_blank.xlsm) | **Template of record** — empty starter with same layout/macros; copy this for a fresh catalog |
+| `catalog/build/Strider_Media_Catalog.xlsx` | Build skeleton only (no macros) — do not use for daily work |
+| `catalog/build/Strider_Media_Catalog_blank.xlsm` | Mirror of the blank template |
+
+Always open a `.xlsm`. Session notes for agents: [`HANDOFF.md`](HANDOFF.md).
 
 Sheets:
 
@@ -12,35 +21,37 @@ Sheets:
 - **VideoEntry** — add videos (`LoadVideoFromFinderSelection` → tag → `AppendVideoRow`)
 - **Photos** / **Videos** — catalogs
 - **Lists** — click-to-pick vocabularies (edit here to change options)
+- **ReadMe** — short in-workbook notes
 
 **Photos columns:**  
-Name, Path, Date, Time, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, notes
+Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, notes
 
 **Videos columns:**  
 Name, Path, Date, Time, Type, FileSize, Duration, FrameRate, Resolution, Camera, Speed, f-stop, ISO, Rating, Species, Behavior, Locale, Send to UK, View, Lighting, notes
 
 **View options:** surface, bottom, both, from below, eye level
 
-**Always open the `.xlsm` file.**
-
 ### First-time setup
+
+Prefer an existing `.xlsm` (working copy or blank template). Only rebuild from the `.xlsx` skeleton as a last resort.
 
 ```bash
 chmod +x scripts/*.sh
-./scripts/setup_workbook.sh
 ./scripts/install_mac_helpers.sh
+# Last resort — overwrites the working-copy .xlsm (refused unless --force):
+# ./scripts/setup_workbook.sh --force
 ```
 
-Then import macros:
-
-1. Open `catalog/Strider_Media_Catalog.xlsm` and enable macros.
+1. Open the **working copy** or a **copy of the blank template**; enable macros.
 2. **Tools → Macro → Visual Basic…**
-3. Delete old **CatalogMacros** / **AppEvents** if present (AppEvents breaks on Mac).
+3. Delete old **CatalogMacros** / **AppEvents** if present (AppEvents breaks on Mac; there is no AppEvents source in `catalog/macros/` anymore).
 4. **File → Import File…** → `catalog/macros/CatalogMacros.bas`
 5. One-click picks:
    - **Microsoft Excel Objects → Entry** → paste `catalog/macros/EntrySheet_SelectionChange.txt`
    - **Microsoft Excel Objects → VideoEntry** → paste `catalog/macros/VideoEntrySheet_SelectionChange.txt`
 6. Save as `.xlsm`. Restart Excel after installing helpers.
+
+After layout/macro tweaks you care about, keep the blank `.xlsm` in sync (and optionally mirror it into `catalog/build/`).
 
 Macros:
 
@@ -69,6 +80,26 @@ Installed by `AssignMacroShortcuts` / `Auto_Open` after re-importing `CatalogMac
 If OnKey still does nothing on your Mac Excel build, use **Tools → Customize Keyboard…** → category **Macros** → assign the same keys (or ⌥ letter keys, which that dialog supports).
 
 Requires [exiftool](https://exiftool.org/) (`brew install exiftool`).
+
+### Tag photo sequences (hi / hi+ / Continuous)
+
+Before culling, tag a folder of photos by capture-time proximity. Skips non-continuous drive modes by default. Dry-run first:
+
+```bash
+python3 scripts/tag_sequences.py "/path/to/DCIM/folder"
+python3 scripts/tag_sequences.py "/path/to/DCIM/folder" --write
+```
+
+Writes Keywords/Subject: `Sequence:yes|no`, `SequenceID:YYYYMMDD-HHMMSS`, `SequencePos:6/54`.  
+Load into Entry picks these up; Append preserves them.
+
+To add the Sequence columns to an existing open workbook:
+
+```bash
+python3 scripts/add_sequence_fields.py   # workbook must already be open in Excel
+```
+
+Then re-import `catalog/macros/CatalogMacros.bas` and reinstall helpers (`./scripts/install_mac_helpers.sh`).
 
 ### Add a photo
 

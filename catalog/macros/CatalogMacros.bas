@@ -265,6 +265,10 @@ Private Sub LoadPhotoMetadata(ByVal appleHandler As String, ByVal macroName As S
     SetEntryValue "Camera", camera
     SetEntryValue "Mode", mode
     SetEntryValue "Lens", lens
+    ' SequencePos is like 6/54 — must be text or Excel treats it as a fraction.
+    SetEntryTextValue "Sequence", MetaAt(meta, 12)
+    SetEntryTextValue "SequenceID", MetaAt(meta, 13)
+    SetEntryTextValue "SequencePos", MetaAt(meta, 14)
 
     Worksheets(ENTRY_SHEET).Activate
     MsgBox "Loaded metadata for:" & vbCrLf & fileName & vbCrLf & vbCrLf & _
@@ -526,6 +530,10 @@ Private Sub WriteCatalogTagsToFile(ByVal sheetName As String, ByVal path As Stri
     Dim lighting As String
     Dim notes As String
 
+    Dim sequence As String
+    Dim sequenceID As String
+    Dim sequencePos As String
+
     rating = Trim$(CStr(FormValue(sheetName, "Rating")))
     species = Trim$(CStr(FormValue(sheetName, "Species")))
     behavior = Trim$(CStr(FormValue(sheetName, "Behavior")))
@@ -534,14 +542,19 @@ Private Sub WriteCatalogTagsToFile(ByVal sheetName As String, ByVal path As Stri
     viewTag = Trim$(CStr(FormValue(sheetName, "View")))
     lighting = Trim$(CStr(FormValue(sheetName, "Lighting")))
     notes = Trim$(CStr(FormValue(sheetName, "notes")))
+    sequence = Trim$(CStr(FormValue(sheetName, "Sequence")))
+    sequenceID = Trim$(CStr(FormValue(sheetName, "SequenceID")))
+    sequencePos = Trim$(CStr(FormValue(sheetName, "SequencePos")))
 
     If Len(rating) = 0 And Len(species) = 0 And Len(behavior) = 0 And Len(locale) = 0 And _
-       Len(sendUK) = 0 And Len(viewTag) = 0 And Len(lighting) = 0 And Len(notes) = 0 Then
+       Len(sendUK) = 0 And Len(viewTag) = 0 And Len(lighting) = 0 And Len(notes) = 0 And _
+       Len(sequence) = 0 And Len(sequenceID) = 0 And Len(sequencePos) = 0 Then
         Exit Sub
     End If
 
     payload = path & vbTab & rating & "|" & species & "|" & behavior & "|" & locale & "|" & _
-              sendUK & "|" & viewTag & "|" & lighting & "|" & notes
+              sendUK & "|" & viewTag & "|" & lighting & "|" & notes & "|" & _
+              sequence & "|" & sequenceID & "|" & sequencePos
 
 #If Mac Then
     On Error GoTo appleScriptMissing
@@ -571,7 +584,8 @@ End Sub
 Private Function PhotoFieldList() As Variant
     PhotoFieldList = Array( _
         "Name", "Path", "Date", "Time", "Type", "FileSize", "Camera", "Mode", "Lens", _
-        "Speed", "f-stop", "ISO", "Rating", "Species", "Behavior", "Locale", _
+        "Speed", "f-stop", "ISO", "Sequence", "SequenceID", "SequencePos", _
+        "Rating", "Species", "Behavior", "Locale", _
         "Send to UK", "View", "Lighting", "notes")
 End Function
 
@@ -603,6 +617,20 @@ End Function
 
 Private Sub SetEntryValue(fieldName As String, value As Variant)
     SetFormValue ENTRY_SHEET, fieldName, value
+End Sub
+
+Private Sub SetEntryTextValue(fieldName As String, value As Variant)
+    SetFormTextValue ENTRY_SHEET, fieldName, value
+End Sub
+
+Private Sub SetFormTextValue(ByVal sheetName As String, fieldName As String, value As Variant)
+    Dim r As Long
+    r = FormRowFor(sheetName, fieldName)
+    If r = 0 Then Exit Sub
+    With Worksheets(sheetName).Cells(r, 2)
+        .NumberFormat = "@"
+        .Value = CStr(value)
+    End With
 End Sub
 
 Private Sub FormatEntryField(fieldName As String, ByVal numFmt As String)
@@ -780,7 +808,15 @@ Private Sub SetCellByHeader(ws As Worksheet, ByVal rowNum As Long, headerName As
     Dim col As Long
     col = HeaderCol(ws, headerName)
     If col = 0 Then Exit Sub
-    ws.Cells(rowNum, col).Value = value
+    ' Keep Sequence* as text (SequencePos like 6/54 must not become a fraction).
+    If StrComp(headerName, "Sequence", vbTextCompare) = 0 Or _
+       StrComp(headerName, "SequenceID", vbTextCompare) = 0 Or _
+       StrComp(headerName, "SequencePos", vbTextCompare) = 0 Then
+        ws.Cells(rowNum, col).NumberFormat = "@"
+        ws.Cells(rowNum, col).Value = CStr(value)
+    Else
+        ws.Cells(rowNum, col).Value = value
+    End If
 End Sub
 
 Private Sub AddNameHyperlink(ws As Worksheet, ByVal rowNum As Long, path As String, fileName As String)

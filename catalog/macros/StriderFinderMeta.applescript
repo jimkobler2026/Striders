@@ -9,8 +9,8 @@ on loadFromFinder(dummy)
 end loadFromFinder
 
 on loadFromPreview(dummy)
-    set p to my frontPreviewPOSIXPath()
-    if p is "" then return "ERROR" & tab & "Open a photo in Preview first (front document is used)."
+    set p to my frontPreviewPOSIXPath("")
+    if p is "" then return "ERROR" & tab & "Open a saved photo in Preview first (Untitled / unsaved windows have no path)."
     return my metadataLine(p)
 end loadFromPreview
 
@@ -21,8 +21,8 @@ on loadVideoFromFinder(dummy)
 end loadVideoFromFinder
 
 on loadVideoFromPreview(dummy)
-    set p to my frontPreviewPOSIXPath()
-    if p is "" then return "ERROR" & tab & "Open a video in Preview first (front document is used)."
+    set p to my frontPreviewPOSIXPath("")
+    if p is "" then return "ERROR" & tab & "Open a saved video in Preview first (Untitled / unsaved windows have no path)."
     return my videoMetadataLine(p)
 end loadVideoFromPreview
 
@@ -32,23 +32,38 @@ on readPath(posixPath)
 end readPath
 
 on frontPreviewPOSIXPath(dummy)
+    -- Callers (AppleScriptTask and internal) must pass one arg; use "".
+    -- Prefer "tell … to set …" so Preview tell-scoping cannot swallow locals.
     try
-        tell application "Preview"
-            if (count of documents) is 0 then return ""
-            try
-                return path of front document
-            on error
-                try
-                    return path of document of front window
-                on error
-                    return ""
-                end try
-            end try
-        end tell
+        tell application "Preview" to set docCount to count of documents
+        if docCount is 0 then return ""
     on error
         return ""
     end try
+
+    set pathTry to my pathOfFrontPreviewDocument()
+    if pathTry is not "" then return pathTry
+
+    try
+        tell application "Preview" to set pathTry to (get path of document of front window)
+        if pathTry is missing value then return ""
+        set pathText to pathTry as text
+        if pathText starts with "/" then return pathText
+    end try
+    return ""
 end frontPreviewPOSIXPath
+
+on pathOfFrontPreviewDocument()
+    try
+        tell application "Preview" to set pathTry to (get path of front document)
+        if pathTry is missing value then return ""
+        set pathText to pathTry as text
+        if pathText starts with "/" then return pathText
+        return ""
+    on error
+        return ""
+    end try
+end pathOfFrontPreviewDocument
 
 -- Trash the front/selected image using Preview's own Edit menu
 -- (Edit → Move Selected Image to Trash). Fast; no Finder hop.
@@ -91,7 +106,7 @@ on trashFrontPreview(payload)
     end try
 end trashFrontPreview
 
--- payload: path <tab> Rating|Species|Behavior|Locale|SendToUK|View|Lighting|notes
+-- payload: path <tab> Rating|Species|Behavior|Locale|SendToUK|View|Lighting|notes|Sequence|SequenceID|SequencePos
 on writeCatalogTags(payload)
     if payload is "" then return "ERROR" & tab & "No tag payload."
     set AppleScript's text item delimiters to tab
@@ -126,6 +141,17 @@ on writeTagsToFile(posixPath, tagBlob)
     set viewTag to my tagAt(tags, 6)
     set lighting to my tagAt(tags, 7)
     set notes to my tagAt(tags, 8)
+    set sequence to my tagAt(tags, 9)
+    set sequenceID to my tagAt(tags, 10)
+    set sequencePos to my tagAt(tags, 11)
+
+    -- If Entry left Sequence* blank, keep any existing Sequence* keywords on the file
+    if sequence is "" and sequenceID is "" and sequencePos is "" then
+        set existingSeq to my readSequenceFields(posixPath)
+        set sequence to item 1 of existingSeq
+        set sequenceID to item 2 of existingSeq
+        set sequencePos to item 3 of existingSeq
+    end if
 
     set kwList to {}
     if species is not "" then set end of kwList to "Species:" & species
@@ -134,6 +160,9 @@ on writeTagsToFile(posixPath, tagBlob)
     if sendUK is not "" then set end of kwList to "SendToUK:" & sendUK
     if viewTag is not "" then set end of kwList to "View:" & viewTag
     if lighting is not "" then set end of kwList to "Lighting:" & lighting
+    if sequence is not "" then set end of kwList to "Sequence:" & sequence
+    if sequenceID is not "" then set end of kwList to "SequenceID:" & sequenceID
+    if sequencePos is not "" then set end of kwList to "SequencePos:" & sequencePos
 
     set AppleScript's text item delimiters to ", "
     set kwJoined to kwList as text
@@ -245,8 +274,38 @@ on metadataLine(posixPath)
         end try
     end try
 
+    set seqFields to my readSequenceFields(posixPath)
+    set meta to meta & "|" & (item 1 of seqFields) & "|" & (item 2 of seqFields) & "|" & (item 3 of seqFields)
     return "OK" & tab & posixPath & tab & meta
 end metadataLine
+
+-- Returns {Sequence, SequenceID, SequencePos} from Keywords/Subject
+on readSequenceFields(posixPath)
+    set exif to my exiftoolPath()
+    set seq to ""
+    set seqID to ""
+    set seqPos to ""
+    try
+        set kwRaw to do shell script quoted form of exif & " -m -s3 -Keywords -Subject " & quoted form of posixPath
+    on error
+        return {seq, seqID, seqPos}
+    end try
+    set AppleScript's text item delimiters to {return, linefeed, ","}
+    set bits to text items of kwRaw
+    set AppleScript's text item delimiters to ""
+    repeat with bit in bits
+        set t to my trimText(bit as text)
+        -- Check longer keys first (SequenceID/Pos also start with "Sequence")
+        if t starts with "SequenceID:" then
+            set seqID to text 12 thru -1 of t
+        else if t starts with "SequencePos:" then
+            set seqPos to text 13 thru -1 of t
+        else if t starts with "Sequence:" then
+            set seq to text 10 thru -1 of t
+        end if
+    end repeat
+    return {seq, seqID, seqPos}
+end readSequenceFields
 
 on videoMetadataLine(posixPath)
     set exif to my exiftoolPath()

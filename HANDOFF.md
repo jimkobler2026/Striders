@@ -1,11 +1,17 @@
 # Striders media catalog — handoff
 
-**Status:** Ready for real use. Next step is to catalog media and tweak tags/macros as needed.
+**Status:** Ready for real use. Next: one real Preview cull session on the working-copy `.xlsm` (see Suggested next steps).
 
-**Working copy:** `catalog/Strider_Media_Catalog.xlsm`  
-**Blank template:** `catalog/Strider_Media_Catalog_blank.xlsm` (mirrored in `catalog/build/`)
+**Canonical files (same story as README):**
 
-Always open the `.xlsm`, not the build `.xlsx`.
+| Priority | File | Role |
+|---|---|---|
+| 1 | `catalog/Strider_Media_Catalog.xlsm` | **Working copy** — open this for culling |
+| 2 | `catalog/Strider_Media_Catalog_blank.xlsm` | **Template of record** — empty + macros; copy for a fresh catalog |
+| 3 | `catalog/build/Strider_Media_Catalog_blank.xlsm` | Mirror of the blank |
+| — | `catalog/build/Strider_Media_Catalog.xlsx` | Skeleton only (no macros); input to cold rebuild |
+
+Always open a `.xlsm`, never the build `.xlsx`. Day-to-day user guide: `README.md`.
 
 ---
 
@@ -15,14 +21,25 @@ A Mac Excel media catalog for water-strider **photos** and **videos**, focused o
 
 | Piece | Role |
 |---|---|
-| `catalog/Strider_Media_Catalog.xlsm` | Live workbook (macros + sheets) |
-| `catalog/Strider_Media_Catalog_blank.xlsm` | Empty starter with same layout/macros |
+| `catalog/Strider_Media_Catalog.xlsm` | Working copy (macros + sheets + data) |
+| `catalog/Strider_Media_Catalog_blank.xlsm` | Template of record (empty + same layout/macros) |
 | `catalog/macros/CatalogMacros.bas` | All VBA (import into VBE) |
 | `catalog/macros/*Sheet_SelectionChange.txt` | Click-to-pick handlers for Entry / VideoEntry |
 | `catalog/macros/StriderFinderMeta.applescript` (+ Open/Reveal) | Excel → Finder/Preview/exiftool bridge |
-| `scripts/install_mac_helpers.sh` | Compiles `.scpt` into Excel’s Application Scripts folder |
-| `scripts/build_catalog.py` | Regenerates sheet layout / lists into `catalog/build/*.xlsx` |
 | `README.md` | Setup + day-to-day workflow |
+
+### Scripts
+
+| Script | When to use | Touches live `.xlsm`? |
+|---|---|---|
+| `scripts/install_mac_helpers.sh` | After AppleScript helper edits; safe anytime | No — only `~/Library/Application Scripts/com.microsoft.Excel/` |
+| `scripts/build_catalog.py` | Regenerate sheet skeleton / Lists into `catalog/build/*.xlsx` | No |
+| `scripts/tag_sequences.py` | Tag hi/Continuous photo sequences by capture-time gap (dry-run default; `--write` to apply) | No — only the folder you pass |
+| `scripts/add_sequence_fields.py` | Insert Sequence\* rows/cols into an **open** `.xlsm` via xlwings | **Yes** — open workbook |
+| `scripts/setup_workbook.sh` | Cold rebuild of a new `.xlsm` shell from that `.xlsx` | **Yes — overwrites** (refuses unless `--force`) |
+| `scripts/apply_video_sheets.py` | One-shot: add/refresh VideoEntry + Videos via xlwings | **Yes** — open workbook must already be the live `.xlsm`; not for daily use |
+| `scripts/setup_xlsm.applescript` | Incomplete stub; superseded by `setup_workbook.sh` | Do not run |
+| `scripts/upgrade_entry_layout.applescript` | Obsolete Entry layout (old field names); superseded by current blank/live workbooks | Do not run — would wipe Entry contents |
 
 Helpers are installed at:
 
@@ -40,7 +57,9 @@ Requires **exiftool** (`brew install exiftool`).
 - **Lists** — vocabulary source for click-picks (edit here to change options)  
 - **ReadMe** — short in-workbook notes  
 
-**Photos columns:** Name, Path, Date, Time, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, notes  
+**Photos columns:** Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, notes  
+
+**Sequence fields** come from Keywords written by `scripts/tag_sequences.py` (`Sequence:yes|no`, `SequenceID:…`, `SequencePos:i/n`). Load fills them; Append preserves them.
 
 **Videos columns:** Name, Path, Date, Time, Type, FileSize, Duration, FrameRate, Resolution, Camera, Speed, f-stop, ISO, Rating, Species, Behavior, Locale, Send to UK, View, Lighting, notes  
 
@@ -104,17 +123,18 @@ If click-picks stop filling B, run **`FixEnableEvents`** once (events can get st
 ## Regenerating layout / blank
 
 ```bash
-./scripts/install_mac_helpers.sh   # after AppleScript changes
-python3 scripts/build_catalog.py   # sheet skeleton → catalog/build/*.xlsx
+./scripts/install_mac_helpers.sh   # after AppleScript changes (safe; does not touch .xlsm)
+python3 scripts/build_catalog.py   # sheet skeleton → catalog/build/*.xlsx only
 ```
 
-Prefer keeping the hand-tuned **blank `.xlsm`** as the template of record once macros are imported. Mirror a fresh blank into `catalog/build/` when you save one.
+**Do not** run `./scripts/setup_workbook.sh` casually — it rebuilds and **overwrites** the working-copy `.xlsm` (macros/data lost). It refuses if that file exists unless you pass `--force`. Canonical empty template is the hand-tuned **blank `.xlsm`**, not the build `.xlsx`. After meaningful layout/macro changes, update `catalog/Strider_Media_Catalog_blank.xlsm` and mirror it into `catalog/build/`.
 
 ---
 
 ## Known quirks
 
-- Do **not** keep an **AppEvents** class module — it breaks on Mac Excel.  
+- Do **not** import or keep an **AppEvents** class module — it breaks on Mac Excel. The old `catalog/macros/AppEvents.cls` source was removed; if AppEvents still appears in the VBE for a workbook, delete that module and save.  
+- `scripts/setup_workbook.sh` overwrites the live `.xlsm`; it requires `--force` if that file already exists. Use `install_mac_helpers.sh` for helper-only updates.  
 - Old OnKey letters (L/A/M/F/…) conflicted with Excel built-ins; current set is Q/I/W/E/U/R/O/J/D.  
 - Photos “dark line” between rows 4–5 was linked to **vertical page breaks** / view mode — use **View → Normal** if a line reappears.  
 - Append finds rows by **filename** for overwrite; rename files carefully.  
@@ -122,10 +142,27 @@ Prefer keeping the hand-tuned **blank `.xlsm`** as the template of record once m
 
 ---
 
+## Sequence tagging
+
+```bash
+# Always dry-run first; use a temp copy if testing --write on valuable originals
+python3 scripts/tag_sequences.py "/path/to/photos"
+python3 scripts/tag_sequences.py "/path/to/photos" --write
+```
+
+- Gates on Sony `ReleaseMode` Continuous / Hi / Hi+ (`--include-all` to disable).
+- Gap default 1.0 s (`--gap`).
+- Prints counts: scanned, skipped, sequences, frames in sequences, singles, size min/med/max.
+- After layout update: open `.xlsm` → `python3 scripts/add_sequence_fields.py` → re-import `CatalogMacros.bas` → `./scripts/install_mac_helpers.sh` → restart Excel.
+
 ## Suggested next steps
 
-1. Run a real cull session tomorrow (Preview → Load → tag → Append → trash rejects).  
-2. Adjust Lists / click-pick options as real media demands.  
-3. Note any Load/Append/tag-write failures and fix in `CatalogMacros.bas` + AppleScript helpers.  
-4. Optionally drop the obsolete build `.xlsx` once the blank `.xlsm` is the only template you use.  
-5. Commit again after meaningful tag or macro changes.
+1. **Cull session** — open the working-copy `.xlsm`; Preview → Ctrl+Shift+I → tag → Ctrl+Shift+W → Ctrl+Shift+D for rejects (video: U / R).  
+2. **Watch these during the first real session** (fix in macros/helpers if any fail):  
+   - Preview load vs Finder load (I/Q and U/E)  
+   - Append overwrite of an existing same-filename row  
+   - Tag write-back via exiftool (Rating / keywords / notes)  
+   - Video duration / frame-rate / resolution on Load  
+3. **Vocab** — add terms on **Lists** and mirror them into Entry / VideoEntry option columns when real media needs them.  
+4. After layout or macro tweaks you want to keep, refresh the blank `.xlsm` (template of record) and mirror into `catalog/build/`.  
+5. Commit after meaningful tag-list or macro/helper changes (docs-only gap fixes can wait for that commit).

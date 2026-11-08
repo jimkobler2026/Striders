@@ -16,6 +16,9 @@ PHOTO_HEADERS = [
     "Path",
     "Date",
     "Time",
+    "Sequence",
+    "SequenceID",
+    "SequencePos",
     "Rating",
     "Species",
     "Behavior",
@@ -102,6 +105,9 @@ ENTRY_FIELDS = [
     "Speed",
     "f-stop",
     "ISO",
+    "Sequence",
+    "SequenceID",
+    "SequencePos",
     "Rating",
     "Species",
     "Behavior",
@@ -111,7 +117,7 @@ ENTRY_FIELDS = [
     "Lighting",
     "notes",
 ]
-ENTRY_AUTO_COUNT = 12
+ENTRY_AUTO_COUNT = 15
 
 # Video Entry: auto first, then tags
 VIDEO_ENTRY_FIELDS = [
@@ -285,6 +291,9 @@ def add_tag_write_preview(ws, field_rows: dict[str, int], start_row: int = 32):
         ("Keyword SendToUK:", f'=IF({bref("Send to UK")}="","(none)","SendToUK:"&{bref("Send to UK")})'),
         ("Keyword View:", f'=IF({bref("View")}="","(none)","View:"&{bref("View")})'),
         ("Keyword Lighting:", f'=IF({bref("Lighting")}="","(none)","Lighting:"&{bref("Lighting")})'),
+        ("Keyword Sequence:", f'=IF({bref("Sequence")}="","(none)","Sequence:"&{bref("Sequence")})'),
+        ("Keyword SequenceID:", f'=IF({bref("SequenceID")}="","(none)","SequenceID:"&{bref("SequenceID")})'),
+        ("Keyword SequencePos:", f'=IF({bref("SequencePos")}="","(none)","SequencePos:"&{bref("SequencePos")})'),
         ("Location → Locale", f'=IF({bref("Locale")}="","(none)",{bref("Locale")})'),
         ("Description → notes", f'=IF({bref("notes")}="","(none)",{bref("notes")})'),
     ]
