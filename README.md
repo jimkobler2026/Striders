@@ -20,14 +20,15 @@ Sheets:
 - **Entry** — add photos (`LoadFromFinderSelection` → tag → `AppendPhotoRow`)
 - **VideoEntry** — add videos (`LoadVideoFromFinderSelection` → tag → `AppendVideoRow`)
 - **Photos** / **Videos** — catalogs
+- **Captions** — AI photo captions (prompt at top; Ctrl+Shift+Y from Photos). Default: Gemini Flash
 - **Lists** — click-to-pick vocabularies (edit here to change options)
 - **ReadMe** — short in-workbook notes
 
 **Photos columns:**  
-Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, notes
+Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, Caustic camera aim, Caustic appearance, Filters, notes
 
 **Videos columns:**  
-Name, Path, Date, Time, Type, FileSize, Duration, FrameRate, Resolution, Camera, Speed, f-stop, ISO, Rating, Species, Behavior, Locale, Send to UK, View, Lighting, notes
+Name, Path, Date, Time, Type, FileSize, Duration, FrameRate, Resolution, Camera, Speed, f-stop, ISO, Rating, Species, Behavior, Locale, Send to UK, View, Lighting, Caustic camera aim, Caustic appearance, Filters, notes
 
 **View options:** surface, bottom, both, from below, eye level
 
@@ -60,6 +61,7 @@ Macros:
 - `TrashFrontPreviewDocument` — Preview’s own **Edit → Move Selected Image to Trash** (Ctrl+Shift+D)
 - `PickSelectedOption` — click an option in C+, then run this to fill column B
 - `OpenSelectedInPreview` / `RevealSelectedInFinder` (Photos or Videos)
+- `CaptionSelectedPhotos` — Nat Geo–style captions for selected Photos rows → **Captions** sheet
 
 Keyboard shortcuts (Control key, not ⌘). Old L/A/M/F combos conflict with Excel built-ins (filter, formula args, Copilot, fonts).
 
@@ -76,6 +78,7 @@ Installed by `AssignMacroShortcuts` / `Auto_Open` after re-importing `CatalogMac
 | Control+Shift+O | OpenSelectedInPreview |
 | Control+Shift+J | RevealSelectedInFinder |
 | Control+Shift+D | TrashFrontPreviewDocument (via Preview menu) |
+| Control+Shift+Y | CaptionSelectedPhotos (Gemini Flash by default) |
 
 If OnKey still does nothing on your Mac Excel build, use **Tools → Customize Keyboard…** → category **Macros** → assign the same keys (or ⌥ letter keys, which that dialog supports).
 
@@ -115,7 +118,7 @@ Then re-import `catalog/macros/CatalogMacros.bas` and reinstall helpers (`./scri
 3. Click tag options in columns **C+** on **VideoEntry**.
 4. Run **AppendVideoRow** (also writes tags into the original file).
 
-**Tag write-back on Append:** Rating → `Rating`/`XMP:Rating`; notes → Description/Caption; Locale → Location; Species/Behavior/Locale/SendToUK/View/Lighting → Keywords / Subject (`Species:…`, `Behavior:…`, etc.). Modifies the original file in place.
+**Tag write-back on Append:** Rating → `Rating`/`XMP:Rating`; notes → Description/Caption; Locale → Location; Species/Behavior/Locale/SendToUK/View/Lighting/CausticAim/CausticAppearance/Filters/Sequence* → Keywords / Subject (`Species:…`, `CausticAim:…`, etc.). Modifies the original file in place.
 
 ### Review
 

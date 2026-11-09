@@ -34,6 +34,9 @@ PHOTO_HEADERS = [
     "f-stop",
     "ISO",
     "Lighting",
+    "Caustic camera aim",
+    "Caustic appearance",
+    "Filters",
     "notes",
 ]
 
@@ -58,6 +61,9 @@ VIDEO_HEADERS = [
     "Send to UK",
     "View",
     "Lighting",
+    "Caustic camera aim",
+    "Caustic appearance",
+    "Filters",
     "notes",
 ]
 
@@ -89,6 +95,9 @@ LISTS = {
         "2 strobes",
         "mole spotlight",
     ],
+    "Caustic camera aim": ["thru water & ripples", "from below"],
+    "Caustic appearance": ["weak", "moderate", "great", "spectacular"],
+    "Filters": ["none", "polarizing"],
 }
 
 # Photo Entry: auto first, then tags
@@ -115,6 +124,9 @@ ENTRY_FIELDS = [
     "Send to UK",
     "View",
     "Lighting",
+    "Caustic camera aim",
+    "Caustic appearance",
+    "Filters",
     "notes",
 ]
 ENTRY_AUTO_COUNT = 15
@@ -141,6 +153,9 @@ VIDEO_ENTRY_FIELDS = [
     "Send to UK",
     "View",
     "Lighting",
+    "Caustic camera aim",
+    "Caustic appearance",
+    "Filters",
     "notes",
 ]
 VIDEO_ENTRY_AUTO_COUNT = 13
@@ -291,6 +306,9 @@ def add_tag_write_preview(ws, field_rows: dict[str, int], start_row: int = 32):
         ("Keyword SendToUK:", f'=IF({bref("Send to UK")}="","(none)","SendToUK:"&{bref("Send to UK")})'),
         ("Keyword View:", f'=IF({bref("View")}="","(none)","View:"&{bref("View")})'),
         ("Keyword Lighting:", f'=IF({bref("Lighting")}="","(none)","Lighting:"&{bref("Lighting")})'),
+        ("Keyword CausticAim:", f'=IF({bref("Caustic camera aim")}="","(none)","CausticAim:"&{bref("Caustic camera aim")})'),
+        ("Keyword CausticAppearance:", f'=IF({bref("Caustic appearance")}="","(none)","CausticAppearance:"&{bref("Caustic appearance")})'),
+        ("Keyword Filters:", f'=IF({bref("Filters")}="","(none)","Filters:"&{bref("Filters")})'),
         ("Keyword Sequence:", f'=IF({bref("Sequence")}="","(none)","Sequence:"&{bref("Sequence")})'),
         ("Keyword SequenceID:", f'=IF({bref("SequenceID")}="","(none)","SequenceID:"&{bref("SequenceID")})'),
         ("Keyword SequencePos:", f'=IF({bref("SequencePos")}="","(none)","SequencePos:"&{bref("SequencePos")})'),
@@ -382,20 +400,62 @@ def add_readme_sheet(wb: Workbook):
     lines = [
         "",
         "Sheets",
-        "Entry — add photos (LoadFromFinderSelection → AppendPhotoRow).",
-        "VideoEntry — add videos (LoadVideoFromFinderSelection → AppendVideoRow).",
-        "Photos / Videos — catalogs.",
+        "Entry — load / tag / append photos.",
+        "VideoEntry — load / tag / append videos.",
+        "Photos / Videos — catalogs (filter, open, reveal).",
+        "Lists — click-to-pick vocabularies (edit here to change options).",
+        "",
+        "Daily cull (photos)",
+        "1. Open candidates in Preview; step through them.",
+        "2. Ctrl+Shift+I — load front Preview photo into Entry (or Ctrl+Shift+Q from Finder).",
+        "3. Click tag options in columns C+ (fills column B).",
+        "4. Ctrl+Shift+W — append to Photos and write tags into the file via exiftool.",
+        "5. Reject in Preview, or Ctrl+Shift+D (Preview → Move Selected Image to Trash).",
+        "Videos: Ctrl+Shift+U / E to load, Ctrl+Shift+R to append.",
+        "",
+        "Shortcuts (Control+Shift, not ⌘)",
+        "Q Load photo Finder · I Load photo Preview · W Append photo",
+        "E Load video Finder · U Load video Preview · R Append video",
+        "O Open selected catalog row(s) in Preview · J Reveal in Finder · D Trash front Preview",
+        "",
+        "Sequence fields (photos)",
+        "Sequence / SequenceID / SequencePos come from Keywords written by scripts/tag_sequences.py.",
+        "Load fills them; Append preserves them. SequencePos is text (e.g. 6/54), not a fraction.",
+        "",
+        "Tag write-back on Append",
+        "Rating → Rating/XMP:Rating; notes → Description/Caption; Locale → Location;",
+        "Species, Behavior, Locale, SendToUK, View, Lighting, CausticAim, CausticAppearance,",
+        "Filters, Sequence* → Keywords / Subject (Species:…, CausticAim:…, etc.).",
         "",
         "Photos columns",
         ", ".join(PHOTO_HEADERS),
         "",
         "Videos columns",
         ", ".join(VIDEO_HEADERS),
+        "",
+        "Notes",
+        "Always open the .xlsm (macros). Re-import CatalogMacros.bas after macro edits.",
+        "If click-picks stop filling B, run FixEnableEvents once.",
+        "Edit Lists and keep Entry/VideoEntry option columns in sync when adding terms.",
     ]
     for i, line in enumerate(lines, start=2):
         ws[f"A{i}"] = line
-        ws[f"A{i}"].font = PLAIN_FONT
-        ws[f"A{i}"].alignment = Alignment(horizontal="left")
+        # Section headers: short title lines with no punctuation-heavy body
+        if line in {
+            "Sheets",
+            "Daily cull (photos)",
+            "Shortcuts (Control+Shift, not ⌘)",
+            "Sequence fields (photos)",
+            "Tag write-back on Append",
+            "Photos columns",
+            "Videos columns",
+            "Notes",
+        }:
+            ws[f"A{i}"].font = HEADER_FONT
+        else:
+            ws[f"A{i}"].font = PLAIN_FONT
+        ws[f"A{i}"].alignment = Alignment(horizontal="left", wrap_text=True)
+    ws.column_dimensions["A"].width = 110
     return ws
 
 

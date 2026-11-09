@@ -21,9 +21,14 @@ Private Const ENTRY_SHEET As String = "Entry"
 Private Const VIDEO_ENTRY_SHEET As String = "VideoEntry"
 Private Const PHOTOS_SHEET As String = "Photos"
 Private Const VIDEOS_SHEET As String = "Videos"
+Private Const CAPTIONS_SHEET As String = "Captions"
 Private Const HEADER_ROW As Long = 1
+' Captions sheet: row1 title, row2 prompt, row3 hint, row4 headers, row5+ data
+Private Const CAPTIONS_HEADER_ROW As Long = 4
 Private Const ENTRY_FIRST_FIELD_ROW As Long = 9
 Private Const ENTRY_OPTION_FIRST_COL As Long = 3
+' Default caption provider: google = Gemini Flash (cheap + good enough). Use "anthropic" for Claude.
+Private Const DEFAULT_CAPTION_PROVIDER As String = "google"
 
 Public Sub Auto_Open()
     Application.EnableEvents = True
@@ -57,6 +62,7 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+o"
     Application.OnKey "^+j"
     Application.OnKey "^+d"
+    Application.OnKey "^+y"
 
     Application.OnKey "^+q", "LoadFromFinderSelection"
     Application.OnKey "^+i", "LoadFromPreviewSelection"
@@ -67,6 +73,7 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+o", "OpenSelectedInPreview"
     Application.OnKey "^+j", "RevealSelectedInFinder"
     Application.OnKey "^+d", "TrashFrontPreviewDocument"
+    Application.OnKey "^+y", "CaptionSelectedPhotos"
     On Error GoTo 0
 End Sub
 
@@ -125,7 +132,8 @@ End Function
 
 Private Function IsClickPickField(ByVal label As String) As Boolean
     Select Case label
-        Case "Rating", "Species", "Behavior", "Locale", "Send to UK", "View", "Lighting"
+        Case "Rating", "Species", "Behavior", "Locale", "Send to UK", "View", "Lighting", _
+             "Caustic camera aim", "Caustic appearance", "Filters"
             IsClickPickField = True
         Case Else
             IsClickPickField = False
@@ -514,6 +522,194 @@ appleScriptMissing:
 #End If
 End Sub
 
+' Generate Nat Geo–style captions for selected Photos rows → Captions sheet.
+' Default provider: Gemini Flash (google). Override DEFAULT_CAPTION_PROVIDER for Claude etc.
+Public Sub CaptionSelectedPhotos()
+    Dim paths As Collection
+    Dim p As Variant
+    Dim path As String
+    Dim raw As String
+    Dim parts() As String
+    Dim provider As String
+    Dim model As String
+    Dim words As String
+    Dim caption As String
+    Dim fileName As String
+    Dim ws As Worksheet
+    Dim destRow As Long
+    Dim okCount As Long
+    Dim errCount As Long
+    Dim sheetName As String
+
+    If Selection Is Nothing Then
+        MsgBox "Select photo rows on the Photos sheet.", vbExclamation
+        Exit Sub
+    End If
+    sheetName = Selection.Worksheet.Name
+    If StrComp(sheetName, PHOTOS_SHEET, vbTextCompare) <> 0 Then
+        MsgBox "Select rows on the Photos sheet, then run CaptionSelectedPhotos (Ctrl+Shift+Y).", vbExclamation
+        Exit Sub
+    End If
+
+    Set paths = CollectSelectedPaths()
+    If paths.Count = 0 Then
+        MsgBox "Select Name/Path cells or rows on Photos.", vbExclamation
+        Exit Sub
+    End If
+
+    EnsureCaptionsSheet
+    Set ws = Worksheets(CAPTIONS_SHEET)
+    EnsureColumns ws, CaptionFieldList()
+
+    okCount = 0
+    errCount = 0
+    Application.StatusBar = "Captioning…"
+
+    For Each p In paths
+        path = NormalizePath(CStr(p))
+        fileName = BaseName(path)
+#If Mac Then
+        On Error GoTo appleScriptMissing
+        raw = AppleScriptTask("StriderCaption.scpt", "captionPhoto", path & vbTab & DEFAULT_CAPTION_PROVIDER)
+        On Error GoTo 0
+#Else
+        MsgBox "CaptionSelectedPhotos is implemented for Mac Excel.", vbInformation
+        Application.StatusBar = False
+        Exit Sub
+#End If
+        parts = Split(raw, vbTab)
+        If UBound(parts) < 0 Then
+            errCount = errCount + 1
+            GoTo nextPath
+        End If
+        If parts(0) = "ERROR" Then
+            errCount = errCount + 1
+            If UBound(parts) >= 1 Then
+                MsgBox "Caption failed for " & fileName & ":" & vbCrLf & parts(1), vbExclamation
+            End If
+            GoTo nextPath
+        End If
+        If UBound(parts) < 4 Then
+            errCount = errCount + 1
+            GoTo nextPath
+        End If
+
+        provider = parts(1)
+        model = parts(2)
+        words = parts(3)
+        caption = parts(4)
+        If UBound(parts) > 4 Then
+            Dim i As Long
+            For i = 5 To UBound(parts)
+                caption = caption & vbTab & parts(i)
+            Next i
+        End If
+
+        destRow = FindRowByFileName(ws, fileName)
+        If destRow = 0 Then destRow = NextDataRow(ws)
+        SetCellByHeader ws, destRow, "Name", fileName
+        SetCellByHeader ws, destRow, "Path", path
+        SetCellByHeader ws, destRow, "Provider", provider
+        SetCellByHeader ws, destRow, "Model", model
+        SetCellByHeader ws, destRow, "Words", words
+        SetCellByHeader ws, destRow, "Generated", Now
+        FormatCatalogField ws, destRow, "Generated", "m/d/yy h:mm AM/PM"
+        SetCellByHeader ws, destRow, "Caption", caption
+        AddNameHyperlink ws, destRow, path, fileName
+        okCount = okCount + 1
+nextPath:
+    Next p
+
+    Application.StatusBar = False
+    ws.Activate
+    MsgBox "Captions written: " & okCount & "  ·  failed: " & errCount & vbCrLf & _
+           "Provider: " & DEFAULT_CAPTION_PROVIDER & " (edit DEFAULT_CAPTION_PROVIDER in CatalogMacros for Claude).", _
+           vbInformation
+    Exit Sub
+
+appleScriptMissing:
+    Application.StatusBar = False
+    MsgBox "Could not run StriderCaption.scpt." & vbCrLf & _
+           "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+End Sub
+
+Private Function CaptionFieldList() As Variant
+    CaptionFieldList = Array( _
+        "Name", "Path", "Provider", "Model", "Words", "Generated", "Caption")
+End Function
+
+Private Sub EnsureCaptionsSheet()
+    Dim ws As Worksheet
+    Dim fields As Variant
+    Dim i As Long
+    Dim hdr As Long
+
+    On Error Resume Next
+    Set ws = Worksheets(CAPTIONS_SHEET)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        Set ws = Worksheets.Add(After:=Worksheets(Worksheets.Count))
+        ws.Name = CAPTIONS_SHEET
+    End If
+
+    hdr = CAPTIONS_HEADER_ROW
+    ws.Cells(1, 1).Value = "Captioning prompt"
+    ws.Cells(1, 1).Font.Name = "Times New Roman"
+    ws.Cells(1, 1).Font.Size = 14
+    ws.Cells(1, 1).Font.Bold = True
+
+    ' Keep in sync with catalog/macros/caption_prompt.txt (and scripts/caption_photo.py).
+    ws.Cells(2, 1).Value = CaptionPromptText()
+    ws.Cells(2, 1).Font.Name = "Times New Roman"
+    ws.Cells(2, 1).Font.Size = 12
+    ws.Cells(2, 1).WrapText = True
+    On Error Resume Next
+    ws.Range("A2:G2").Merge
+    ws.Rows(2).RowHeight = 150
+    On Error GoTo 0
+
+    ws.Cells(3, 1).Value = "Select Photos rows → Ctrl+Shift+Y (CaptionSelectedPhotos). Default provider: Gemini Flash (google). Change DEFAULT_CAPTION_PROVIDER in CatalogMacros for Claude."
+    ws.Cells(3, 1).Font.Name = "Times New Roman"
+    ws.Cells(3, 1).Font.Size = 12
+    ws.Cells(3, 1).Font.Italic = True
+
+    fields = CaptionFieldList()
+    For i = LBound(fields) To UBound(fields)
+        If Len(Trim$(CStr(ws.Cells(hdr, i - LBound(fields) + 1).Value))) = 0 Then
+            ws.Cells(hdr, i - LBound(fields) + 1).Value = CStr(fields(i))
+        End If
+        ws.Cells(hdr, i - LBound(fields) + 1).Font.Name = "Times New Roman"
+        ws.Cells(hdr, i - LBound(fields) + 1).Font.Size = 14
+        ws.Cells(hdr, i - LBound(fields) + 1).Font.Bold = True
+    Next i
+    EnsureColumns ws, CaptionFieldList()
+End Sub
+
+Private Function CaptionPromptText() As String
+    CaptionPromptText = _
+        "You are writing a single National Geographic magazine photo caption." & vbLf & vbLf & _
+        "Requirements:" & vbLf & _
+        "- About 60 words (50–70 is fine). Prefer one compact paragraph." & vbLf & _
+        "- Evocative, precise, scientifically curious — not flowery marketing copy." & vbLf & _
+        "- Ground the caption in what is actually visible in the image (organisms, leaf, ripples, reflections, light on water). Metadata may name species/place/behavior; use it only when it fits what you see." & vbLf & _
+        "- Photographer notes are trusted field observations — incorporate them when they fit the image (do not quote them verbatim unless natural)." & vbLf & _
+        "- Note any patterns of color, shape, or ripples." & vbLf & _
+        "- Be on the lookout for small water striders and what they might be doing. Before writing, scan the entire frame and count every visible strider (they can be tiny and easy to miss). If more than one is present, say how many and briefly what they appear to be doing." & vbLf & _
+        "- When water-surface optics are visible, you may briefly nod to ripples or caustics without lecturing." & vbLf & _
+        "- Do NOT list camera settings, filenames, ratings, sequence IDs, or keyword dumps." & vbLf & _
+        "- No title, hashtags, or preamble. Output ONLY the caption text."
+End Function
+
+Private Function SheetHeaderRow(ws As Worksheet) As Long
+    If Not ws Is Nothing Then
+        If StrComp(ws.Name, CAPTIONS_SHEET, vbTextCompare) = 0 Then
+            SheetHeaderRow = CAPTIONS_HEADER_ROW
+            Exit Function
+        End If
+    End If
+    SheetHeaderRow = HEADER_ROW
+End Function
+
 ' --- Form sheets (Entry / VideoEntry): A=label, B=value ---
 
 ' Write Entry/VideoEntry tags into the media file via exiftool (modifies the original).
@@ -528,6 +724,9 @@ Private Sub WriteCatalogTagsToFile(ByVal sheetName As String, ByVal path As Stri
     Dim sendUK As String
     Dim viewTag As String
     Dim lighting As String
+    Dim causticAim As String
+    Dim causticAppearance As String
+    Dim filters As String
     Dim notes As String
 
     Dim sequence As String
@@ -541,20 +740,38 @@ Private Sub WriteCatalogTagsToFile(ByVal sheetName As String, ByVal path As Stri
     sendUK = Trim$(CStr(FormValue(sheetName, "Send to UK")))
     viewTag = Trim$(CStr(FormValue(sheetName, "View")))
     lighting = Trim$(CStr(FormValue(sheetName, "Lighting")))
+    causticAim = Trim$(CStr(FormValue(sheetName, "Caustic camera aim")))
+    causticAppearance = Trim$(CStr(FormValue(sheetName, "Caustic appearance")))
+    filters = Trim$(CStr(FormValue(sheetName, "Filters")))
     notes = Trim$(CStr(FormValue(sheetName, "notes")))
     sequence = Trim$(CStr(FormValue(sheetName, "Sequence")))
     sequenceID = Trim$(CStr(FormValue(sheetName, "SequenceID")))
     sequencePos = Trim$(CStr(FormValue(sheetName, "SequencePos")))
 
     If Len(rating) = 0 And Len(species) = 0 And Len(behavior) = 0 And Len(locale) = 0 And _
-       Len(sendUK) = 0 And Len(viewTag) = 0 And Len(lighting) = 0 And Len(notes) = 0 And _
+       Len(sendUK) = 0 And Len(viewTag) = 0 And Len(lighting) = 0 And _
+       Len(causticAim) = 0 And Len(causticAppearance) = 0 And Len(filters) = 0 And _
+       Len(notes) = 0 And _
        Len(sequence) = 0 And Len(sequenceID) = 0 And Len(sequencePos) = 0 Then
         Exit Sub
     End If
 
-    payload = path & vbTab & rating & "|" & species & "|" & behavior & "|" & locale & "|" & _
-              sendUK & "|" & viewTag & "|" & lighting & "|" & notes & "|" & _
-              sequence & "|" & sequenceID & "|" & sequencePos
+    ' Labeled fields (order-independent) — must match StriderFinderMeta.writeTagsToFile keys.
+    payload = path & vbTab & _
+              "Rating=" & rating & "|" & _
+              "Species=" & species & "|" & _
+              "Behavior=" & behavior & "|" & _
+              "Locale=" & locale & "|" & _
+              "SendToUK=" & sendUK & "|" & _
+              "View=" & viewTag & "|" & _
+              "Lighting=" & lighting & "|" & _
+              "CausticAim=" & causticAim & "|" & _
+              "CausticAppearance=" & causticAppearance & "|" & _
+              "Filters=" & filters & "|" & _
+              "notes=" & notes & "|" & _
+              "Sequence=" & sequence & "|" & _
+              "SequenceID=" & sequenceID & "|" & _
+              "SequencePos=" & sequencePos
 
 #If Mac Then
     On Error GoTo appleScriptMissing
@@ -586,14 +803,16 @@ Private Function PhotoFieldList() As Variant
         "Name", "Path", "Date", "Time", "Type", "FileSize", "Camera", "Mode", "Lens", _
         "Speed", "f-stop", "ISO", "Sequence", "SequenceID", "SequencePos", _
         "Rating", "Species", "Behavior", "Locale", _
-        "Send to UK", "View", "Lighting", "notes")
+        "Send to UK", "View", "Lighting", _
+        "Caustic camera aim", "Caustic appearance", "Filters", "notes")
 End Function
 
 Private Function VideoFieldList() As Variant
     VideoFieldList = Array( _
         "Name", "Path", "Date", "Time", "Type", "FileSize", "Duration", "FrameRate", _
         "Resolution", "Camera", "Speed", "f-stop", "ISO", _
-        "Rating", "Species", "Behavior", "Locale", "Send to UK", "View", "Lighting", "notes")
+        "Rating", "Species", "Behavior", "Locale", "Send to UK", "View", "Lighting", _
+        "Caustic camera aim", "Caustic appearance", "Filters", "notes")
 End Function
 
 Private Function FormValue(ByVal sheetName As String, fieldName As String) As Variant
@@ -688,10 +907,12 @@ End Sub
 Private Sub EnsureColumns(ws As Worksheet, fields As Variant)
     Dim i As Long
     Dim nm As String
+    Dim hdr As Long
+    hdr = SheetHeaderRow(ws)
     For i = LBound(fields) To UBound(fields)
         nm = CStr(fields(i))
         If HeaderCol(ws, nm) = 0 Then
-            ws.Cells(HEADER_ROW, HeaderLastCol(ws) + 1).Value = nm
+            ws.Cells(hdr, HeaderLastCol(ws) + 1).Value = nm
         End If
     Next i
 End Sub
@@ -699,9 +920,11 @@ End Sub
 Private Function HeaderCol(ws As Worksheet, headerName As String) As Long
     Dim c As Long
     Dim lastCol As Long
+    Dim hdr As Long
+    hdr = SheetHeaderRow(ws)
     lastCol = HeaderLastCol(ws)
     For c = 1 To lastCol
-        If StrComp(Trim$(CStr(ws.Cells(HEADER_ROW, c).Value)), headerName, vbTextCompare) = 0 Then
+        If StrComp(Trim$(CStr(ws.Cells(hdr, c).Value)), headerName, vbTextCompare) = 0 Then
             HeaderCol = c
             Exit Function
         End If
@@ -711,9 +934,11 @@ End Function
 
 Private Function HeaderLastCol(ws As Worksheet) As Long
     Dim c As Long
+    Dim hdr As Long
+    hdr = SheetHeaderRow(ws)
     HeaderLastCol = 1
     For c = 1 To 64
-        If Len(Trim$(CStr(ws.Cells(HEADER_ROW, c).Value))) > 0 Then HeaderLastCol = c
+        If Len(Trim$(CStr(ws.Cells(hdr, c).Value))) > 0 Then HeaderLastCol = c
     Next c
 End Function
 
@@ -722,14 +947,16 @@ Private Function CatalogLastDataRow(ws As Worksheet) As Long
     Dim c As Long
     Dim bottom As Long
     Dim cellBottom As Long
+    Dim hdr As Long
 
+    hdr = SheetHeaderRow(ws)
     lastCol = HeaderLastCol(ws)
-    bottom = HEADER_ROW
+    bottom = hdr
     For c = 1 To lastCol
         cellBottom = ws.Cells(ws.Rows.Count, c).End(xlUp).Row
         If cellBottom > bottom Then bottom = cellBottom
     Next c
-    If bottom < HEADER_ROW Then bottom = HEADER_ROW
+    If bottom < hdr Then bottom = hdr
     CatalogLastDataRow = bottom
 End Function
 
@@ -739,17 +966,19 @@ Private Function NextDataRow(ws As Worksheet) As Long
     Dim lastRow As Long
     Dim pathVal As String
     Dim nameVal As String
+    Dim hdr As Long
 
+    hdr = SheetHeaderRow(ws)
     pathCol = HeaderCol(ws, "Path")
     nameCol = HeaderCol(ws, "Name")
     lastRow = CatalogLastDataRow(ws)
 
-    If lastRow = HEADER_ROW Then
-        NextDataRow = HEADER_ROW + 1
+    If lastRow = hdr Then
+        NextDataRow = hdr + 1
         Exit Function
     End If
 
-    If lastRow = HEADER_ROW + 1 Then
+    If lastRow = hdr + 1 Then
         If pathCol > 0 Then pathVal = Trim$(CStr(ws.Cells(lastRow, pathCol).Value))
         If nameCol > 0 Then nameVal = Trim$(CStr(ws.Cells(lastRow, nameCol).Value))
         If Len(pathVal) = 0 And Len(nameVal) = 0 Then
@@ -777,15 +1006,17 @@ Private Function FindRowByFileName(ws As Worksheet, ByVal fileName As String) As
         Exit Function
     End If
 
+    Dim hdr As Long
+    hdr = SheetHeaderRow(ws)
     nameCol = HeaderCol(ws, "Name")
     pathCol = HeaderCol(ws, "Path")
     lastRow = CatalogLastDataRow(ws)
-    If lastRow <= HEADER_ROW Then
+    If lastRow <= hdr Then
         FindRowByFileName = 0
         Exit Function
     End If
 
-    For r = HEADER_ROW + 1 To lastRow
+    For r = hdr + 1 To lastRow
         cellName = ""
         If nameCol > 0 Then cellName = Trim$(CStr(ws.Cells(r, nameCol).Value))
         If Len(cellName) = 0 And nameCol > 0 Then cellName = BaseName(PathFromCell(ws.Cells(r, nameCol)))
@@ -853,7 +1084,7 @@ Private Function CollectSelectedPaths() As Collection
 
     Set ws = Worksheets(sheetName)
     For Each cell In Selection.Cells
-        If cell.Row = HEADER_ROW Then GoTo continueCell
+        If cell.Row = SheetHeaderRow(ws) Then GoTo continueCell
         If cell.Worksheet.Name <> sheetName Then GoTo continueCell
         path = PathFromCatalogRow(ws, cell.Row)
         If Len(path) = 0 Then path = PathFromCell(cell)

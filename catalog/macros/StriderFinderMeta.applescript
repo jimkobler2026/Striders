@@ -106,7 +106,10 @@ on trashFrontPreview(payload)
     end try
 end trashFrontPreview
 
--- payload: path <tab> Rating|Species|Behavior|Locale|SendToUK|View|Lighting|notes|Sequence|SequenceID|SequencePos
+-- payload: path <tab> key=value|key=value|...
+-- Keys: Rating, Species, Behavior, Locale, SendToUK, View, Lighting,
+--        CausticAim, CausticAppearance, Filters, notes, Sequence, SequenceID, SequencePos
+-- Labeled fields are order-independent (avoids slot-shift bugs when columns are added).
 on writeCatalogTags(payload)
     if payload is "" then return "ERROR" & tab & "No tag payload."
     set AppleScript's text item delimiters to tab
@@ -129,21 +132,20 @@ on writeTagsToFile(posixPath, tagBlob)
         return "ERROR" & tab & "File not found: " & posixPath
     end try
 
-    set AppleScript's text item delimiters to "|"
-    set tags to text items of tagBlob
-    set AppleScript's text item delimiters to ""
-
-    set rating to my tagAt(tags, 1)
-    set species to my tagAt(tags, 2)
-    set behavior to my tagAt(tags, 3)
-    set locale to my tagAt(tags, 4)
-    set sendUK to my tagAt(tags, 5)
-    set viewTag to my tagAt(tags, 6)
-    set lighting to my tagAt(tags, 7)
-    set notes to my tagAt(tags, 8)
-    set sequence to my tagAt(tags, 9)
-    set sequenceID to my tagAt(tags, 10)
-    set sequencePos to my tagAt(tags, 11)
+    set rating to my fieldValue(tagBlob, "Rating")
+    set species to my fieldValue(tagBlob, "Species")
+    set behavior to my fieldValue(tagBlob, "Behavior")
+    set locale to my fieldValue(tagBlob, "Locale")
+    set sendUK to my fieldValue(tagBlob, "SendToUK")
+    set viewTag to my fieldValue(tagBlob, "View")
+    set lighting to my fieldValue(tagBlob, "Lighting")
+    set causticAim to my fieldValue(tagBlob, "CausticAim")
+    set causticAppearance to my fieldValue(tagBlob, "CausticAppearance")
+    set filters to my fieldValue(tagBlob, "Filters")
+    set notes to my fieldValue(tagBlob, "notes")
+    set sequence to my fieldValue(tagBlob, "Sequence")
+    set sequenceID to my fieldValue(tagBlob, "SequenceID")
+    set sequencePos to my fieldValue(tagBlob, "SequencePos")
 
     -- If Entry left Sequence* blank, keep any existing Sequence* keywords on the file
     if sequence is "" and sequenceID is "" and sequencePos is "" then
@@ -160,6 +162,9 @@ on writeTagsToFile(posixPath, tagBlob)
     if sendUK is not "" then set end of kwList to "SendToUK:" & sendUK
     if viewTag is not "" then set end of kwList to "View:" & viewTag
     if lighting is not "" then set end of kwList to "Lighting:" & lighting
+    if causticAim is not "" then set end of kwList to "CausticAim:" & causticAim
+    if causticAppearance is not "" then set end of kwList to "CausticAppearance:" & causticAppearance
+    if filters is not "" then set end of kwList to "Filters:" & filters
     if sequence is not "" then set end of kwList to "Sequence:" & sequence
     if sequenceID is not "" then set end of kwList to "SequenceID:" & sequenceID
     if sequencePos is not "" then set end of kwList to "SequencePos:" & sequencePos
@@ -174,19 +179,17 @@ on writeTagsToFile(posixPath, tagBlob)
     if rating is not "" then
         set cmd to cmd & " -Rating=" & quoted form of rating & " -XMP:Rating=" & quoted form of rating
     end if
-    if notes is not "" then
-        set cmd to cmd & " -XMP-dc:Description=" & quoted form of notes
-        set cmd to cmd & " -EXIF:ImageDescription=" & quoted form of notes
-        set cmd to cmd & " -IPTC:Caption-Abstract=" & quoted form of notes
-    end if
+    -- Always set description/caption from notes (empty clears stale SequencePos leaks like "2/5")
+    set cmd to cmd & " -XMP-dc:Description=" & quoted form of notes
+    set cmd to cmd & " -EXIF:ImageDescription=" & quoted form of notes
+    set cmd to cmd & " -IPTC:Caption-Abstract=" & quoted form of notes
     if locale is not "" then
         set cmd to cmd & " -XMP-iptcCore:Location=" & quoted form of locale
         set cmd to cmd & " -IPTC:Sub-location=" & quoted form of locale
     end if
-    if kwJoined is not "" then
-        set cmd to cmd & " -sep \", \" -Keywords=" & quoted form of kwJoined
-        set cmd to cmd & " -XMP-dc:Subject=" & quoted form of kwJoined
-    end if
+    -- Replace Keywords/Subject with the catalog set (clears prior swapped junk)
+    set cmd to cmd & " -sep \", \" -Keywords=" & quoted form of kwJoined
+    set cmd to cmd & " -XMP-dc:Subject=" & quoted form of kwJoined
 
     set cmd to cmd & " " & quoted form of posixPath
 
@@ -198,15 +201,21 @@ on writeTagsToFile(posixPath, tagBlob)
     end try
 end writeTagsToFile
 
-on tagAt(tags, idx)
-    if (count of tags) < idx then return ""
-    set t to item idx of tags
-    try
-        return trimText(t)
-    on error
-        return t as text
-    end try
-end tagAt
+-- Parse "key=value|key=value|..." (keys are case-sensitive as sent by VBA).
+on fieldValue(tagBlob, keyName)
+    set AppleScript's text item delimiters to "|"
+    set bits to text items of tagBlob
+    set AppleScript's text item delimiters to ""
+    set prefix to keyName & "="
+    repeat with bit in bits
+        set t to my trimText(bit as text)
+        if t starts with prefix then
+            if (length of t) = (length of prefix) then return ""
+            return text ((length of prefix) + 1) thru -1 of t
+        end if
+    end repeat
+    return ""
+end fieldValue
 
 on trimText(s)
     set s to s as text

@@ -1,0 +1,12 @@
+You are writing a single National Geographic magazine photo caption.
+
+Requirements:
+- About 60 words (50–70 is fine). Prefer one compact paragraph.
+- Evocative, precise, scientifically curious — not flowery marketing copy.
+- Ground the caption in what is actually visible in the image (organisms, leaf, ripples, reflections, light on water). Metadata may name species/place/behavior; use it only when it fits what you see.
+- Photographer notes are trusted field observations — incorporate them when they fit the image (do not quote them verbatim unless natural).
+- Note any patterns of color, shape, or ripples.
+- Be on the lookout for small water striders and what they might be doing. Before writing, scan the entire frame and count every visible strider (they can be tiny and easy to miss). If more than one is present, say how many and briefly what they appear to be doing.
+- When water-surface optics are visible, you may briefly nod to ripples or caustics without lecturing.
+- Do NOT list camera settings, filenames, ratings, sequence IDs, or keyword dumps.
+- No title, hashtags, or preamble. Output ONLY the caption text.
