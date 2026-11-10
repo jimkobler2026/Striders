@@ -24,6 +24,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from exif_datetime import parse_exif_dt, stamp_local  # noqa: E402
+
 ALLOWED_ROOT = Path.home() / "Pictures" / "environmental caustics"
 
 PHOTO_EXTS = {
@@ -60,20 +66,6 @@ def find_exiftool() -> str:
     raise SystemExit("exiftool not found. Install with: brew install exiftool")
 
 
-def parse_exif_dt(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    raw = raw.strip()
-    if not raw or raw.startswith("0000"):
-        return None
-    for fmt in ("%Y:%m:%d %H:%M:%S.%f", "%Y:%m:%d %H:%M:%S"):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    return None
-
-
 def assert_under_allowed_root(folder: Path) -> Path:
     root = ALLOWED_ROOT.resolve()
     try:
@@ -108,6 +100,7 @@ def read_capture_times(exiftool: str, paths: list[Path]) -> dict[Path, tuple[dat
         exiftool,
         "-json",
         "-DateTimeOriginal",
+        "-OffsetTimeOriginal",
         "-CreateDate",
         "-MediaCreateDate",
         "--",
@@ -122,8 +115,9 @@ def read_capture_times(exiftool: str, paths: list[Path]) -> dict[Path, tuple[dat
     out: dict[Path, tuple[datetime | None, str]] = {}
     for p in paths:
         row = by_name.get(p.resolve()) or {}
+        offset = row.get("OffsetTimeOriginal")
         for key in ("DateTimeOriginal", "CreateDate", "MediaCreateDate"):
-            dt = parse_exif_dt(row.get(key))
+            dt = parse_exif_dt(row.get(key), offset if key == "DateTimeOriginal" else None)
             if dt is not None:
                 out[p] = (dt, key)
                 break
@@ -158,7 +152,7 @@ def build_plan(paths: list[Path], stamps: dict[Path, tuple[datetime | None, str]
             dt = datetime.fromtimestamp(path.stat().st_mtime)
             source = "mtime"
 
-        stamp = dt.strftime("%Y%m%d-%H%M%S")
+        stamp = stamp_local(dt)
         # Nikon often uses _DSC… — avoid YYYYMMDD-HHMMSS__DSC…
         original = path.name[1:] if path.name.startswith("_") else path.name
         proposed = f"{stamp}_{original}"

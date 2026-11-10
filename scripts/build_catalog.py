@@ -33,6 +33,9 @@ PHOTO_HEADERS = [
     "Speed",
     "f-stop",
     "ISO",
+    "Focus Distance",
+    "GPS",
+    "Serial Number",
     "Lighting",
     "Caustic camera aim",
     "Caustic appearance",
@@ -94,10 +97,12 @@ LISTS = {
         "godox strobe",
         "2 strobes",
         "mole spotlight",
+        "incandescent indoor",
     ],
-    "Caustic camera aim": ["thru water & ripples", "from below"],
+    "Caustic camera aim": ["thru water & ripples", "from below", "reflectance"],
     "Caustic appearance": ["weak", "moderate", "great", "spectacular"],
     "Filters": ["none", "polarizing"],
+    "Panopticon portfolio": ["nope", "maybe", "good", "great"],
 }
 
 # Photo Entry: auto first, then tags
@@ -114,6 +119,9 @@ ENTRY_FIELDS = [
     "Speed",
     "f-stop",
     "ISO",
+    "Focus Distance",
+    "GPS",
+    "Serial Number",
     "Sequence",
     "SequenceID",
     "SequencePos",
@@ -129,7 +137,7 @@ ENTRY_FIELDS = [
     "Filters",
     "notes",
 ]
-ENTRY_AUTO_COUNT = 15
+ENTRY_AUTO_COUNT = 18
 
 # Video Entry: auto first, then tags
 VIDEO_ENTRY_FIELDS = [
@@ -313,7 +321,12 @@ def add_tag_write_preview(ws, field_rows: dict[str, int], start_row: int = 32):
         ("Keyword SequenceID:", f'=IF({bref("SequenceID")}="","(none)","SequenceID:"&{bref("SequenceID")})'),
         ("Keyword SequencePos:", f'=IF({bref("SequencePos")}="","(none)","SequencePos:"&{bref("SequencePos")})'),
         ("Location → Locale", f'=IF({bref("Locale")}="","(none)",{bref("Locale")})'),
-        ("Description → notes", f'=IF({bref("notes")}="","(none)",{bref("notes")})'),
+        (
+            "Description → NOTE:",
+            f'=IF({bref("notes")}="","(none)","NOTE: "&{bref("notes")})',
+        ),
+        # CAPTION body is filled on Load (preserved on Append); not an Entry edit field.
+        ("Description → CAPTION:", "(none)"),
     ]
     for label, formula in preview_rows:
         put(r, 1, label, LABEL_FONT)
@@ -423,8 +436,9 @@ def add_readme_sheet(wb: Workbook):
         "Load fills them; Append preserves them. SequencePos is text (e.g. 6/54), not a fraction.",
         "",
         "Tag write-back on Append",
-        "Uses exiftool MWG composites: Rating → MWG:Rating; notes → MWG:Description;",
-        "Locale → MWG:Location; Species/Behavior/…/Sequence* → MWG:Keywords (IPTC+XMP).",
+        "Uses exiftool MWG composites: Rating → MWG:Rating;",
+        "notes → MWG:Description NOTE: (CAPTION: preserved); Locale → MWG:Location;",
+        "Species/Behavior/…/Sequence* → MWG:Keywords (IPTC+XMP).",
         "",
         "Photos columns",
         ", ".join(PHOTO_HEADERS),

@@ -6,7 +6,8 @@ to 1 at each new burst. Capture-time --gap is the fallback when SequenceNumber
 is absent (phones, non-Sony). Within a burst, order follows the original camera
 number embedded in the filename (…_DSC7659), not timestamp alone.
 
-Dry-run by default. Writes Keywords/Subject:
+Dry-run by default. Writes Keywords/Subject via one persistent exiftool
+(-stay_open) session:
   Sequence:yes|no, SequenceID:YYYYMMDD-HHMMSS, SequencePos:i/n
 
 Bursts shorter than --min-frames (default 4) are Sequence:no — filters out
@@ -29,6 +30,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from exif_datetime import gap_seconds as dt_gap_seconds  # noqa: E402
+from exif_datetime import parse_exif_dt, stamp_local  # noqa: E402
+
 PHOTO_EXTS = {".jpg", ".jpeg", ".tif", ".tiff", ".arw", ".cr2", ".cr3", ".nef", ".dng", ".heic"}
 SEQ_KEYS = ("Sequence", "SequenceID", "SequencePos")
 CONTINUOUS_RE = re.compile(r"(continuous|\bhi\+?\b)", re.I)
@@ -43,6 +51,8 @@ class Frame:
     release_mode: str = ""
     sequence_number: str = ""
     existing: dict[str, str] = field(default_factory=dict)
+    # Full Keywords/Subject from collect pass (for MWG merge on write).
+    keywords_raw: object | None = None
 
 
 @dataclass
@@ -60,20 +70,6 @@ def find_exiftool() -> str:
         if path and Path(path).exists():
             return path
     raise SystemExit("exiftool not found. Install with: brew install exiftool")
-
-
-def parse_exif_dt(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    raw = raw.strip()
-    if not raw or raw.startswith("0000"):
-        return None
-    for fmt in ("%Y:%m:%d %H:%M:%S.%f", "%Y:%m:%d %H:%M:%S"):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    return None
 
 
 def is_continuous_mode(release_mode: str) -> bool:
@@ -146,6 +142,7 @@ def collect_frames(root: Path, recursive: bool, exiftool: str) -> list[Frame]:
         exiftool,
         "-json",
         "-DateTimeOriginal",
+        "-OffsetTimeOriginal",
         "-CreateDate",
         "-ReleaseMode",
         "-ReleaseMode2",
@@ -166,7 +163,9 @@ def collect_frames(root: Path, recursive: bool, exiftool: str) -> list[Frame]:
     by_name = {Path(r.get("SourceFile", "")).resolve(): r for r in rows}
     for p in paths:
         row = by_name.get(p.resolve()) or {}
-        captured = parse_exif_dt(row.get("DateTimeOriginal")) or parse_exif_dt(row.get("CreateDate"))
+        captured = parse_exif_dt(
+            row.get("DateTimeOriginal"), row.get("OffsetTimeOriginal")
+        ) or parse_exif_dt(row.get("CreateDate"))
         if captured is None:
             captured = datetime.fromtimestamp(p.stat().st_mtime)
         release = " ".join(
@@ -174,9 +173,10 @@ def collect_frames(root: Path, recursive: bool, exiftool: str) -> list[Frame]:
             for k in ("ReleaseMode", "ReleaseMode2", "ReleaseMode3")
         ).strip()
         seq_num = str(row.get("SequenceNumber") or row.get("SequenceImageNumber") or "")
-        existing = parse_keyword_map(row.get("Keywords"))
-        if not existing:
-            existing = parse_keyword_map(row.get("Subject"))
+        keywords_raw = row.get("Keywords")
+        if keywords_raw is None:
+            keywords_raw = row.get("Subject")
+        existing = parse_keyword_map(keywords_raw)
         frames.append(
             Frame(
                 path=p,
@@ -184,6 +184,7 @@ def collect_frames(root: Path, recursive: bool, exiftool: str) -> list[Frame]:
                 release_mode=release,
                 sequence_number=seq_num,
                 existing=existing,
+                keywords_raw=keywords_raw,
             )
         )
     return frames
@@ -203,8 +204,7 @@ def cluster_frames(frames: list[Frame], gap_seconds: float) -> list[list[Frame]]
             # New burst when counter returns to 1 or otherwise drops.
             new_burst = curr_sn == 1 or curr_sn < prev_sn
         else:
-            delta = (frame.captured - prev.captured).total_seconds()
-            new_burst = delta > gap_seconds
+            new_burst = dt_gap_seconds(prev.captured, frame.captured) > gap_seconds
         if new_burst:
             clusters.append([frame])
         else:
@@ -231,7 +231,7 @@ def assign_clusters(clusters: list[list[Frame]], min_frames: int = 4) -> list[As
                     )
                 )
             continue
-        seq_id = ordered[0].captured.strftime("%Y%m%d-%H%M%S")
+        seq_id = stamp_local(ordered[0].captured)
         for i, frame in enumerate(ordered, start=1):
             out.append(
                 Assignment(
@@ -272,13 +272,21 @@ def merge_keywords(existing_keywords, assignment: Assignment) -> list[str]:
     return kept
 
 
-def write_assignment(exiftool: str, assignment: Assignment, existing_keywords) -> None:
-    kws = merge_keywords(existing_keywords, assignment)
+def mwg_keyword_args(keywords: list[str], path: Path) -> list[str]:
+    """Arg lines for one MWG full-list Keyword replace (stay_open / -@).
+
+    Do not insert a bare ``--`` before the path: with ``-execute`` / stay_open,
+    everything after ``--`` is treated as a filename (including ``-execute``),
+    which hangs the session. Paths are absolute (or ./…) so option parsing is safe.
+    """
     # MWG:Keywords syncs IPTC:Keywords + XMP-dc:Subject. Full-list replace
     # (not clear+=) — MWG ignores Keywords= when += appears in the same command.
-    cmd = [
-        exiftool,
+    file_arg = str(path)
+    if file_arg.startswith("-"):
+        file_arg = f"./{file_arg}"
+    return [
         "-m",
+        "-P",  # preserve FileModifyDate / FileCreateDate
         "-overwrite_original",
         "-api",
         "LargeFileSupport=1",
@@ -289,13 +297,95 @@ def write_assignment(exiftool: str, assignment: Assignment, existing_keywords) -
         "-IPTC:CodedCharacterSet=UTF8",
         "-sep",
         "||",
-        f"-MWG:Keywords={'||'.join(kws)}",
-        "--",
-        str(assignment.frame.path),
+        f"-MWG:Keywords={'||'.join(keywords)}",
+        file_arg,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode not in (0, 1):
-        raise RuntimeError(proc.stderr or proc.stdout or "exiftool write failed")
+
+
+class ExifToolStayOpen:
+    """One long-lived exiftool process for many per-file writes."""
+
+    def __init__(self, exiftool: str):
+        self.exiftool = exiftool
+        self.proc: subprocess.Popen[str] | None = None
+
+    def __enter__(self) -> ExifToolStayOpen:
+        # Merge stderr into stdout so the pipe cannot fill and deadlock while
+        # we wait for `{ready}` on stdout alone.
+        self.proc = subprocess.Popen(
+            [self.exiftool, "-stay_open", "True", "-@", "-"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        proc = self.proc
+        self.proc = None
+        if proc is None:
+            return
+        try:
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.write("-stay_open\nFalse\n")
+                proc.stdin.flush()
+                proc.stdin.close()
+            proc.wait(timeout=60)
+        except Exception:  # noqa: BLE001
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _await_ready(self) -> str:
+        assert self.proc and self.proc.stdout
+        collected: list[str] = []
+        while True:
+            line = self.proc.stdout.readline()
+            if line == "":
+                raise RuntimeError(
+                    "exiftool closed unexpectedly: " + ("".join(collected).strip() or "no output")
+                )
+            if line.strip() == "{ready}":
+                break
+            collected.append(line)
+        return "".join(collected)
+
+    def write_keywords(self, path: Path, keywords: list[str]) -> None:
+        assert self.proc and self.proc.stdin
+        args = mwg_keyword_args(keywords, path) + ["-execute"]
+        self.proc.stdin.write("\n".join(args) + "\n")
+        self.proc.stdin.flush()
+        out = self._await_ready()
+        if self.proc.poll() is not None:
+            raise RuntimeError(out.strip() or "exiftool exited during write")
+        # exiftool prints "Error:" on missing files etc. before {ready}.
+        if re.search(r"(?i)^Error:", out, re.M):
+            raise RuntimeError(out.strip() or "exiftool write failed")
+
+
+def write_assignments(exiftool: str, pending: list[Assignment]) -> tuple[int, int]:
+    """Write Sequence* tags via stay_open. Returns (written, errors)."""
+    if not pending:
+        return 0, 0
+    written = 0
+    errors = 0
+    with ExifToolStayOpen(exiftool) as session:
+        for assignment in pending:
+            try:
+                kws = merge_keywords(assignment.frame.keywords_raw, assignment)
+                session.write_keywords(assignment.frame.path, kws)
+                written += 1
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                print(f"ERROR {assignment.frame.path.name}: {exc}", file=sys.stderr)
+    return written, errors
 
 
 def already_tagged(frame: Frame, assignment: Assignment) -> bool:
@@ -429,34 +519,15 @@ def main(argv: list[str] | None = None) -> int:
         print("Dry-run only. Re-run with --write to apply tags.")
         return 0
 
-    # Need Keywords for merge — re-read per file is expensive; use existing from first pass
-    # But existing only has Sequence* parsed. Re-fetch Keywords for writes.
-    written = 0
+    pending: list[Assignment] = []
     skipped_same = 0
-    errors = 0
     for a in assignments:
         if not args.force and already_tagged(a.frame, a):
             skipped_same += 1
             continue
-        # Fetch full keywords for merge
-        proc = subprocess.run(
-            [exiftool, "-json", "-Keywords", "-Subject", "--", str(a.frame.path)],
-            capture_output=True,
-            text=True,
-        )
-        kws = None
-        if proc.returncode in (0, 1) and proc.stdout:
-            row = json.loads(proc.stdout)[0]
-            kws = row.get("Keywords")
-            if kws is None:
-                kws = row.get("Subject")
-        try:
-            write_assignment(exiftool, a, kws)
-            written += 1
-        except Exception as exc:  # noqa: BLE001
-            errors += 1
-            print(f"ERROR {a.frame.path.name}: {exc}", file=sys.stderr)
+        pending.append(a)
 
+    written, errors = write_assignments(exiftool, pending)
     print(f"Wrote: {written}  unchanged: {skipped_same}  errors: {errors}")
     return 1 if errors else 0
 

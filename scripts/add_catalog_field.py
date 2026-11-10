@@ -223,7 +223,13 @@ def add_metadata_preview_row(ws, name: str, dry_run: bool) -> None:
         if text == "Metadata written to file on Append":
             section_row = r
         if section_row and r > section_row:
-            if text in ("Location → Locale", "Description → notes"):
+            if text in (
+                "Location → Locale",
+                "Description → notes",
+                "Description → Note",
+                "Description → NOTE:",
+                "Description → CAPTION:",
+            ):
                 insert_at = r
                 break
             if text.startswith("Keyword "):

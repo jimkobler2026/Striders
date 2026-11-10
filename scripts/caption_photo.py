@@ -248,22 +248,137 @@ def metadata_brief(meta: dict, catalog: dict[str, str] | None = None) -> str:
     return "\n".join(lines) if lines else "(no useful metadata)"
 
 
-def make_preview_jpeg(path: Path, max_edge: int = 2048) -> Path:
-    """Downscale for vision APIs; keep a temp file."""
+def extract_embedded_preview(path: Path) -> Path | None:
+    """Pull Sony/JPEG PreviewImage (or similar) via exiftool; None if absent."""
+    exif = shutil.which("exiftool") or next(
+        (c for c in ("/opt/homebrew/bin/exiftool", "/usr/local/bin/exiftool") if Path(c).exists()),
+        None,
+    )
+    if not exif:
+        return None
+    for tag in ("PreviewImage", "JpgFromRaw", "OtherImage"):
+        proc = subprocess.run(
+            [exif, "-b", f"-{tag}", "--", str(path)],
+            capture_output=True,
+        )
+        if proc.returncode not in (0, 1) or not proc.stdout or len(proc.stdout) < 1000:
+            continue
+        # JPEG SOI
+        if not proc.stdout.startswith(b"\xff\xd8"):
+            continue
+        fd, name = tempfile.mkstemp(prefix="caption_embed_", suffix=".jpg")
+        os.write(fd, proc.stdout)
+        os.close(fd)
+        return Path(name)
+    return None
+
+
+def make_preview_jpeg(path: Path, max_edge: int = 2048, *, prefer_embedded: bool = True) -> Path:
+    """Build a small JPEG for vision APIs (embedded preview when present)."""
     from PIL import Image
 
-    im = Image.open(path)
-    im = im.convert("RGB")
-    im.thumbnail((max_edge, max_edge))
-    fd, name = tempfile.mkstemp(prefix="caption_", suffix=".jpg")
-    os.close(fd)
-    out = Path(name)
-    im.save(out, "JPEG", quality=85, optimize=True)
-    return out
+    embedded: Path | None = None
+    source = path
+    if prefer_embedded:
+        embedded = extract_embedded_preview(path)
+        if embedded is not None:
+            source = embedded
+    try:
+        im = Image.open(source)
+        im = im.convert("RGB")
+        im.thumbnail((max_edge, max_edge))
+        fd, name = tempfile.mkstemp(prefix="caption_", suffix=".jpg")
+        os.close(fd)
+        out = Path(name)
+        im.save(out, "JPEG", quality=85, optimize=True)
+        return out
+    finally:
+        if embedded is not None:
+            try:
+                embedded.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def b64_jpeg(path: Path) -> str:
     return base64.standard_b64encode(path.read_bytes()).decode("ascii")
+
+
+def parse_description_sections(raw: str) -> tuple[str, str]:
+    """Split MWG:Description into (note, caption). Legacy unprefixed → note."""
+    text = (raw or "").strip()
+    if not text:
+        return "", ""
+    note_at = text.find("NOTE:")
+    cap_at = text.find("CAPTION:")
+    if note_at < 0 and cap_at < 0:
+        return text, ""
+    note, caption = "", ""
+    if note_at >= 0 and (cap_at < 0 or note_at < cap_at):
+        if cap_at > note_at:
+            note = text[note_at + 5 : cap_at].strip()
+            caption = text[cap_at + 8 :].strip()
+        else:
+            note = text[note_at + 5 :].strip()
+    elif cap_at >= 0:
+        if note_at > cap_at:
+            caption = text[cap_at + 8 : note_at].strip()
+            note = text[note_at + 5 :].strip()
+        else:
+            caption = text[cap_at + 8 :].strip()
+    return note, caption
+
+
+def format_description(note: str, caption: str) -> str:
+    parts: list[str] = []
+    n = (note or "").strip()
+    c = (caption or "").strip()
+    if n:
+        parts.append(f"NOTE: {n}")
+    if c:
+        parts.append(f"CAPTION: {c}")
+    return "\n".join(parts)
+
+
+def find_exiftool() -> str:
+    for candidate in ("/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "exiftool"):
+        path = shutil.which(candidate) if candidate == "exiftool" else candidate
+        if path and Path(path).exists():
+            return path
+    raise RuntimeError("exiftool not found")
+
+
+def embed_caption(path: Path, caption: str) -> None:
+    """Merge CAPTION: into MWG:Description; preserve NOTE:."""
+    exif = find_exiftool()
+    # -b keeps real newlines; -s3 replaces them with "." and breaks NOTE/CAPTION splits.
+    proc = subprocess.run(
+        [exif, "-m", "-b", "-MWG:Description", "--", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    current = (proc.stdout or "").strip() if proc.returncode in (0, 1) else ""
+    note, _old_cap = parse_description_sections(current)
+    new_desc = format_description(note, caption)
+    cmd = [
+        exif,
+        "-m",
+        "-P",
+        "-overwrite_original",
+        "-api",
+        "LargeFileSupport=1",
+        "-use",
+        "MWG",
+        "-charset",
+        "iptc=UTF8",
+        "-IPTC:CodedCharacterSet=UTF8",
+        f"-MWG:Description={new_desc}",
+        "--",
+        str(path),
+    ]
+    written = subprocess.run(cmd, capture_output=True, text=True)
+    if written.returncode not in (0, 1):
+        raise RuntimeError(written.stderr or written.stdout or "caption embed failed")
 
 
 def word_count(text: str) -> int:
@@ -499,6 +614,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Print OK\\tprovider\\tmodel\\twords\\tcaption (or ERROR\\tmessage) for Excel",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON results")
+    parser.add_argument(
+        "--debug-preview",
+        action="store_true",
+        help="Print whether an embedded PreviewImage was used and preview byte size",
+    )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Embed caption into MWG:Description as 'CAPTION: …' (preserves any 'NOTE: …')",
+    )
     args = parser.parse_args(argv)
     load_dotenv(args.env_file)
     # Gemini clients often expect GOOGLE_API_KEY
@@ -539,6 +664,24 @@ def main(argv: list[str] | None = None) -> int:
     meta = read_metadata(photo)
     catalog = read_catalog_row(photo, args.catalog)
     meta_text = metadata_brief(meta, catalog)
+    if args.debug_preview:
+        embedded = extract_embedded_preview(photo)
+        if embedded is not None:
+            print(
+                f"debug-preview: embedded {embedded.stat().st_size} bytes "
+                f"(master {photo.stat().st_size} bytes)",
+                file=sys.stderr,
+            )
+            try:
+                embedded.unlink(missing_ok=True)
+            except Exception:
+                pass
+        else:
+            print(
+                f"debug-preview: no embedded preview; will downscale master "
+                f"({photo.stat().st_size} bytes)",
+                file=sys.stderr,
+            )
     preview = make_preview_jpeg(photo, max_edge=args.max_edge)
     results: list[ProviderResult] = []
     try:
@@ -551,6 +694,12 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
 
+    def maybe_embed(text: str) -> None:
+        if not args.write:
+            return
+        embed_caption(photo, " ".join(text.split()))
+        print(f"Embedded CAPTION: into {photo.name}", file=sys.stderr)
+
     if args.machine:
         r = results[0]
         if r.error or not r.caption:
@@ -558,6 +707,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         # Flatten newlines so Excel/AppleScript can split on tab
         cap = " ".join(r.caption.split())
+        try:
+            maybe_embed(cap)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR\tembed failed: {exc}")
+            return 1
         print(f"OK\t{r.provider}\t{r.model}\t{word_count(cap)}\t{cap}")
         return 0
 
@@ -565,6 +719,11 @@ def main(argv: list[str] | None = None) -> int:
         r = results[0]
         if r.error or not r.caption:
             print(r.error or "empty caption", file=sys.stderr)
+            return 1
+        try:
+            maybe_embed(r.caption)
+        except Exception as exc:  # noqa: BLE001
+            print(f"embed failed: {exc}", file=sys.stderr)
             return 1
         print(r.caption.strip())
         return 0
@@ -585,6 +744,14 @@ def main(argv: list[str] | None = None) -> int:
                 indent=2,
             )
         )
+        if args.write:
+            r0 = next((r for r in results if r.caption and not r.error), None)
+            if r0:
+                try:
+                    maybe_embed(r0.caption)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"embed failed: {exc}", file=sys.stderr)
+                    return 1
         return 0 if all(r.caption and not r.error for r in results) else 1
 
     print(f"Photo: {photo}")
@@ -598,6 +765,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"({word_count(r.caption)} words)")
             print(r.caption)
         print()
+    if args.write:
+        r0 = next((r for r in results if r.caption and not r.error), None)
+        if r0:
+            try:
+                maybe_embed(r0.caption)
+            except Exception as exc:  # noqa: BLE001
+                print(f"embed failed: {exc}", file=sys.stderr)
+                return 1
     return 0 if any(r.caption and not r.error for r in results) else 1
 
 

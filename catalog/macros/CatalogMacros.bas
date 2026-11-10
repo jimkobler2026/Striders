@@ -17,6 +17,7 @@ Option Explicit
 '   Control+Shift+K  AddCatalogField            (new click-pick tag)
 '   Control+Shift+S  AppendPhotoSequence        (all frames of Entry SequenceID)
 ' Re-import this module, then run AssignMacroShortcuts (or reopen the workbook).
+' Re-import alone does not rebind OnKey while the book stays open — Auto_Open only runs on open.
 ' If click-to-pick stops working, run FixEnableEvents, then re-paste Entry/VideoEntry SelectionChange.
 
 Private Const ENTRY_SHEET As String = "Entry"
@@ -307,7 +308,9 @@ Private Sub InsertMetadataPreviewRow(ByVal sheetName As String, ByVal fieldName 
     For r = sectionStart + 1 To sectionStart + 40
         If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Location → Locale", vbTextCompare) = 0 Or _
            StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → notes", vbTextCompare) = 0 Or _
-           StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → Note", vbTextCompare) = 0 Then
+           StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → Note", vbTextCompare) = 0 Or _
+           StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → NOTE:", vbTextCompare) = 0 Or _
+           StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → CAPTION:", vbTextCompare) = 0 Then
             insertAt = r
             Exit For
         End If
@@ -560,10 +563,24 @@ Private Sub LoadPhotoMetadata(ByVal appleHandler As String, ByVal macroName As S
     SetEntryValue "Camera", camera
     SetEntryValue "Mode", mode
     SetEntryValue "Lens", lens
+    ' Focus Distance = Sony FocusDistance2 (e.g. "1.654 m"); blank on phones.
+    SetEntryValue "Focus Distance", MetaAt(meta, 12)
+    ' GPS = GPSPosition when geotagged (phones); does not touch Locale.
+    SetEntryValue "GPS", MetaAt(meta, 13)
+    SetEntryValue "Serial Number", MetaAt(meta, 14)
     ' SequencePos is like 6/54 — must be text or Excel treats it as a fraction.
-    SetEntryTextValue "Sequence", MetaAt(meta, 12)
-    SetEntryTextValue "SequenceID", MetaAt(meta, 13)
-    SetEntryTextValue "SequencePos", MetaAt(meta, 14)
+    SetEntryTextValue "Sequence", MetaAt(meta, 15)
+    SetEntryTextValue "SequenceID", MetaAt(meta, 16)
+    SetEntryTextValue "SequencePos", MetaAt(meta, 17)
+    ' Description NOTE: → Entry Note; CAPTION: → Append preview only (preserved on file).
+    If UBound(parts) >= 3 Then
+        SetEntryValue "Note", parts(3)
+    End If
+    If UBound(parts) >= 4 Then
+        SetDescriptionCaptionPreview ENTRY_SHEET, parts(4)
+    Else
+        SetDescriptionCaptionPreview ENTRY_SHEET, ""
+    End If
 
     Worksheets(ENTRY_SHEET).Activate
     MsgBox "Loaded metadata for:" & vbCrLf & fileName & vbCrLf & vbCrLf & _
@@ -761,6 +778,7 @@ Private Function IsSequenceSeedField(ByVal label As String) As Boolean
     Select Case label
         Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
              "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Focus Distance", "GPS", "Serial Number", _
              "Duration", "FrameRate", "Resolution", _
              "Sequence", "SequenceID", "SequencePos"
             IsSequenceSeedField = False
@@ -837,9 +855,20 @@ Private Function FillEntryAutoFromPath(ByVal posixPath As String) As Boolean
     SetEntryValue "Camera", camera
     SetEntryValue "Mode", mode
     SetEntryValue "Lens", lens
-    SetEntryTextValue "Sequence", MetaAt(meta, 12)
-    SetEntryTextValue "SequenceID", MetaAt(meta, 13)
-    SetEntryTextValue "SequencePos", MetaAt(meta, 14)
+    SetEntryValue "Focus Distance", MetaAt(meta, 12)
+    SetEntryValue "GPS", MetaAt(meta, 13)
+    SetEntryValue "Serial Number", MetaAt(meta, 14)
+    SetEntryTextValue "Sequence", MetaAt(meta, 15)
+    SetEntryTextValue "SequenceID", MetaAt(meta, 16)
+    SetEntryTextValue "SequencePos", MetaAt(meta, 17)
+    If UBound(parts) >= 3 Then
+        SetEntryValue "Note", parts(3)
+    End If
+    If UBound(parts) >= 4 Then
+        SetDescriptionCaptionPreview ENTRY_SHEET, parts(4)
+    Else
+        SetDescriptionCaptionPreview ENTRY_SHEET, ""
+    End If
     FillEntryAutoFromPath = True
     Exit Function
 failFill:
@@ -1046,7 +1075,8 @@ appleScriptMissing:
 #End If
 End Sub
 
-' Generate Nat Geo–style captions for selected Photos rows → Captions sheet.
+' Generate Nat Geo–style captions for selected Photos rows → Captions sheet
+' and embed into the file as MWG:Description "CAPTION: …" (preserves any "NOTE: …").
 ' Default provider: Gemini Flash (google). Override DEFAULT_CAPTION_PROVIDER for Claude etc.
 Public Sub CaptionSelectedPhotos()
     Dim paths As Collection
@@ -1063,7 +1093,11 @@ Public Sub CaptionSelectedPhotos()
     Dim destRow As Long
     Dim okCount As Long
     Dim errCount As Long
+    Dim embedFail As Long
+    Dim embedRaw As String
+    Dim embedParts() As String
     Dim sheetName As String
+    Dim i As Long
 
     If Selection Is Nothing Then
         MsgBox "Select photo rows on the Photos sheet.", vbExclamation
@@ -1087,6 +1121,7 @@ Public Sub CaptionSelectedPhotos()
 
     okCount = 0
     errCount = 0
+    embedFail = 0
     Application.StatusBar = "Captioning…"
 
     For Each p In paths
@@ -1123,7 +1158,6 @@ Public Sub CaptionSelectedPhotos()
         words = parts(3)
         caption = parts(4)
         If UBound(parts) > 4 Then
-            Dim i As Long
             For i = 5 To UBound(parts)
                 caption = caption & vbTab & parts(i)
             Next i
@@ -1140,16 +1174,32 @@ Public Sub CaptionSelectedPhotos()
         FormatCatalogField ws, destRow, "Generated", "m/d/yy h:mm AM/PM"
         SetCellByHeader ws, destRow, "Caption", caption
         AddNameHyperlink ws, destRow, path, fileName
+
+#If Mac Then
+        On Error GoTo embedMissing
+        embedRaw = AppleScriptTask("StriderFinderMeta.scpt", "writeCaption", path & vbTab & caption)
+        On Error GoTo 0
+        embedParts = Split(embedRaw, vbTab)
+        If UBound(embedParts) < 0 Or embedParts(0) = "ERROR" Then
+            embedFail = embedFail + 1
+        End If
+#End If
         okCount = okCount + 1
 nextPath:
     Next p
 
     Application.StatusBar = False
     ws.Activate
-    MsgBox "Captions written: " & okCount & "  ·  failed: " & errCount & vbCrLf & _
+    MsgBox "Captions written: " & okCount & "  ·  failed: " & errCount & _
+           "  ·  file embed failed: " & embedFail & vbCrLf & _
+           "Embedded as MWG:Description CAPTION: (NOTE: preserved)." & vbCrLf & _
            "Provider: " & DEFAULT_CAPTION_PROVIDER & " (edit DEFAULT_CAPTION_PROVIDER in CatalogMacros for Claude).", _
            vbInformation
     Exit Sub
+
+embedMissing:
+    embedFail = embedFail + 1
+    Resume nextPath
 
 appleScriptMissing:
     Application.StatusBar = False
@@ -1295,11 +1345,95 @@ appleScriptMissing:
            "Run scripts/install_mac_helpers.sh, then restart Excel.", vbExclamation
 End Sub
 
+' One-shot: rename Description preview rows and ensure CAPTION line exists (working catalogs).
+Public Sub FixDescriptionPreviewRows()
+    Dim sheetName As Variant
+    For Each sheetName In Array(ENTRY_SHEET, VIDEO_ENTRY_SHEET)
+        FixDescriptionPreviewRowsOnSheet CStr(sheetName)
+    Next sheetName
+    MsgBox "Description preview rows updated (NOTE: / CAPTION:).", vbInformation
+End Sub
+
+Private Sub FixDescriptionPreviewRowsOnSheet(ByVal sheetName As String)
+    Dim ws As Worksheet
+    Dim r As Long
+    Dim label As String
+    Dim noteRow As Long
+    Dim captionRow As Long
+    Dim formula As String
+    Dim notesRow As Long
+
+    On Error Resume Next
+    Set ws = Worksheets(sheetName)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+
+    noteRow = 0
+    captionRow = 0
+    For r = 1 To 200
+        label = Trim$(CStr(ws.Cells(r, 1).Value))
+        If StrComp(label, "Description → notes", vbTextCompare) = 0 Or _
+           StrComp(label, "Description → Note", vbTextCompare) = 0 Or _
+           StrComp(label, "Description → NOTE:", vbTextCompare) = 0 Then
+            noteRow = r
+        End If
+        If StrComp(label, "Description → CAPTION:", vbTextCompare) = 0 Then
+            captionRow = r
+        End If
+    Next r
+    If noteRow = 0 Then Exit Sub
+
+    notesRow = FormRowFor(sheetName, "notes")
+    If notesRow = 0 Then notesRow = FormRowFor(sheetName, "Note")
+    If notesRow > 0 Then
+        formula = "=IF($B$" & notesRow & "="""",""(none)"",""NOTE: ""&$B$" & notesRow & ")"
+    Else
+        formula = CStr(ws.Cells(noteRow, 2).Formula)
+    End If
+
+    ws.Cells(noteRow, 1).Value = "Description → NOTE:"
+    If Len(formula) > 0 Then ws.Cells(noteRow, 2).Formula = formula
+
+    If captionRow = 0 Then
+        ws.Rows(noteRow + 1).Insert Shift:=xlDown
+        captionRow = noteRow + 1
+        ws.Cells(captionRow, 1).Value = "Description → CAPTION:"
+        ws.Cells(captionRow, 2).Value = "(none)"
+    End If
+End Sub
+
+' Fill Append preview "Description → CAPTION:" from file (not an Entry edit field).
+Private Sub SetDescriptionCaptionPreview(ByVal sheetName As String, ByVal captionBody As String)
+    Dim ws As Worksheet
+    Dim r As Long
+    Dim label As String
+    Dim body As String
+
+    On Error Resume Next
+    Set ws = Worksheets(sheetName)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+
+    body = Trim$(captionBody)
+    For r = 1 To 200
+        label = Trim$(CStr(ws.Cells(r, 1).Value))
+        If StrComp(label, "Description → CAPTION:", vbTextCompare) = 0 Then
+            If Len(body) = 0 Then
+                ws.Cells(r, 2).Value = "(none)"
+            Else
+                ws.Cells(r, 2).Value = "CAPTION: " & body
+            End If
+            Exit Sub
+        End If
+    Next r
+End Sub
+
 ' Camera / identity fields — not written as Keywords.
 Private Function IsWritebackField(ByVal label As String) As Boolean
     Select Case label
         Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
              "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Focus Distance", "GPS", "Serial Number", _
              "Duration", "FrameRate", "Resolution"
             IsWritebackField = False
         Case Else
@@ -1349,6 +1483,7 @@ Private Function IsFormFieldLabel(ByVal label As String) As Boolean
     Select Case label
         Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
              "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Focus Distance", "GPS", "Serial Number", _
              "Duration", "FrameRate", "Resolution", _
              "Sequence", "SequenceID", "SequencePos", _
              "notes", "Note"

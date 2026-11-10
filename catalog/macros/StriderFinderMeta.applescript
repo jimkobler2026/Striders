@@ -166,8 +166,9 @@ end trashFrontPreview
 -- payload: path <tab> key=value|key=value|...
 -- Labeled fields are order-independent. New catalog tags need no AppleScript edits:
 -- every non-empty key except Rating/notes becomes Keywords "Key:value".
--- Specials: Rating → MWG:Rating; notes → MWG:Description (empty clears);
+-- Specials: Rating → MWG:Rating; notes → Description NOTE: section (+ notes: Keyword);
 -- Locale → Keywords + MWG:Location; blank Sequence* preserves file Sequence* keywords.
+-- MWG:Description holds optional sections: "NOTE: …" and/or "CAPTION: …" (legacy plain = NOTE).
 on writeCatalogTags(payload)
     if payload is "" then return "ERROR" & tab & "No tag payload."
     set AppleScript's text item delimiters to tab
@@ -179,6 +180,23 @@ on writeCatalogTags(payload)
     set tagBlob to item 2 of parts
     return my writeTagsToFile(posixPath, tagBlob)
 end writeCatalogTags
+
+-- payload: posixPath <tab> captionText — merges CAPTION: section; preserves NOTE:.
+on writeCaption(payload)
+    if payload is "" then return "ERROR" & tab & "No caption payload."
+    set AppleScript's text item delimiters to tab
+    set parts to text items of payload
+    set AppleScript's text item delimiters to ""
+    if (count of parts) < 2 then return "ERROR" & tab & "Caption payload incomplete."
+    set posixPath to item 1 of parts
+    set captionText to item 2 of parts
+    if (count of parts) > 2 then
+        set AppleScript's text item delimiters to tab
+        set captionText to (items 2 thru -1 of parts) as text
+        set AppleScript's text item delimiters to ""
+    end if
+    return my mergeDescriptionSection(posixPath, "caption", captionText)
+end writeCaption
 
 on writeTagsToFile(posixPath, tagBlob)
     set exif to my exiftoolPath()
@@ -224,9 +242,11 @@ on writeTagsToFile(posixPath, tagBlob)
                 else
                     set v to text (eq + 1) thru -1 of t
                 end if
-                -- Rating/notes are not Keywords; Sequence* may be injected from file below
-                if k is "Rating" or k is "notes" then
+                -- Rating is not a Keyword; notes also go into Description NOTE: section
+                if k is "Rating" then
                     -- skip
+                else if k is "notes" then
+                    if v is not "" then set end of kwList to "notes:" & v
                 else if k is "Sequence" or k is "SequenceID" or k is "SequencePos" then
                     if v is not "" then set end of kwList to k & ":" & v
                 else if v is not "" then
@@ -247,16 +267,22 @@ on writeTagsToFile(posixPath, tagBlob)
     set kwJoined to kwList as text
     set AppleScript's text item delimiters to ""
 
+    -- Merge NOTE: into Description; preserve CAPTION:
+    set curDesc to my readDescriptionRaw(posixPath)
+    set sections to my parseDescriptionSections(curDesc)
+    set keepCaption to item 2 of sections
+    set newDesc to my formatDescription(notes, keepCaption)
+
     -- MWG composites sync overlapping EXIF/IPTC/XMP in one write.
     -- CodedCharacterSet creates an IPTC block when missing so Keywords land in IPTC too.
-    set cmd to quoted form of exif & " -m -overwrite_original -api LargeFileSupport=1"
+    -- -P keeps Finder Date Modified / FileCreateDate from jumping to "now"
+    set cmd to quoted form of exif & " -m -P -overwrite_original -api LargeFileSupport=1"
     set cmd to cmd & " -use MWG -charset iptc=UTF8 -IPTC:CodedCharacterSet=UTF8"
 
     if rating is not "" then
         set cmd to cmd & " -MWG:Rating=" & quoted form of rating
     end if
-    -- Always set description from notes (empty clears stale SequencePos leaks like "2/5")
-    set cmd to cmd & " -MWG:Description=" & quoted form of notes
+    set cmd to cmd & " -MWG:Description=" & quoted form of newDesc
     if locale is not "" then
         set cmd to cmd & " -MWG:Location=" & quoted form of locale
     end if
@@ -272,6 +298,97 @@ on writeTagsToFile(posixPath, tagBlob)
         return "ERROR" & tab & errMsg
     end try
 end writeTagsToFile
+
+-- sectionKind: "note" or "caption"; newText is the body (no prefix).
+on mergeDescriptionSection(posixPath, sectionKind, newText)
+    set exif to my exiftoolPath()
+    if exif is "" then return "ERROR" & tab & "exiftool not found. Install with Homebrew: brew install exiftool"
+    try
+        do shell script "test -e " & quoted form of posixPath
+    on error
+        return "ERROR" & tab & "File not found: " & posixPath
+    end try
+
+    set curDesc to my readDescriptionRaw(posixPath)
+    set sections to my parseDescriptionSections(curDesc)
+    set noteBody to item 1 of sections
+    set captionBody to item 2 of sections
+    if sectionKind is "caption" then
+        set captionBody to my trimText(newText)
+    else
+        set noteBody to my trimText(newText)
+    end if
+    set newDesc to my formatDescription(noteBody, captionBody)
+
+    set cmd to quoted form of exif & " -m -P -overwrite_original -api LargeFileSupport=1"
+    set cmd to cmd & " -use MWG -charset iptc=UTF8 -IPTC:CodedCharacterSet=UTF8"
+    set cmd to cmd & " -MWG:Description=" & quoted form of newDesc
+    set cmd to cmd & " " & quoted form of posixPath
+    try
+        do shell script cmd
+        return "OK" & tab & posixPath
+    on error errMsg
+        return "ERROR" & tab & errMsg
+    end try
+end mergeDescriptionSection
+
+on readDescriptionRaw(posixPath)
+    set exif to my exiftoolPath()
+    try
+        -- Use -b (not -s3): -s3 replaces newlines with "." and would corrupt NOTE/CAPTION splits.
+        set raw to do shell script quoted form of exif & " -m -b -MWG:Description " & quoted form of posixPath
+        return my trimText(raw)
+    on error
+        return ""
+    end try
+end readDescriptionRaw
+
+-- Returns {noteBody, captionBody}. Legacy unprefixed text → noteBody.
+on parseDescriptionSections(raw)
+    set t to my trimText(raw)
+    set noteBody to ""
+    set captionBody to ""
+    if t is "" then return {noteBody, captionBody}
+
+    set noteMark to offset of "NOTE:" in t
+    set capMark to offset of "CAPTION:" in t
+    if noteMark is 0 and capMark is 0 then
+        return {t, ""}
+    end if
+
+    if noteMark > 0 and (capMark is 0 or noteMark < capMark) then
+        -- NOTE first (or only)
+        if capMark > noteMark then
+            set noteBody to my trimText(text (noteMark + 5) thru (capMark - 1) of t)
+            set captionBody to my trimText(text (capMark + 8) thru -1 of t)
+        else
+            set noteBody to my trimText(text (noteMark + 5) thru -1 of t)
+        end if
+    else if capMark > 0 and (noteMark is 0 or capMark < noteMark) then
+        -- CAPTION first (or only)
+        if noteMark > capMark then
+            set captionBody to my trimText(text (capMark + 8) thru (noteMark - 1) of t)
+            set noteBody to my trimText(text (noteMark + 5) thru -1 of t)
+        else
+            set captionBody to my trimText(text (capMark + 8) thru -1 of t)
+        end if
+    end if
+    return {noteBody, captionBody}
+end parseDescriptionSections
+
+on formatDescription(noteBody, captionBody)
+    set n to my trimText(noteBody)
+    set c to my trimText(captionBody)
+    set parts to {}
+    if n is not "" then set end of parts to "NOTE: " & n
+    if c is not "" then set end of parts to "CAPTION: " & c
+    if (count of parts) is 0 then return ""
+    -- LF joins cleanly in IPTC/XMP; exiftool -s3 shows CR as "."
+    set AppleScript's text item delimiters to linefeed
+    set out to parts as text
+    set AppleScript's text item delimiters to ""
+    return out
+end formatDescription
 
 -- Parse "key=value|key=value|..." (keys are case-sensitive as sent by VBA).
 on fieldValue(tagBlob, keyName)
@@ -291,11 +408,11 @@ end fieldValue
 
 on trimText(s)
     set s to s as text
-    repeat while s starts with " " or s starts with tab
+    repeat while s starts with " " or s starts with tab or s starts with return or s starts with linefeed
         if (length of s) is 0 then exit repeat
         set s to text 2 thru -1 of s
     end repeat
-    repeat while s ends with " " or s ends with tab
+    repeat while s ends with " " or s ends with tab or s ends with return or s ends with linefeed
         if (length of s) is 0 then exit repeat
         set s to text 1 thru -2 of s
     end repeat
@@ -341,12 +458,13 @@ on metadataLine(posixPath)
         return "ERROR" & tab & "File not found: " & posixPath
     end try
 
-    set fmt to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensID"
+    -- 12 FocusDistance2; 13 GPSPosition; 14 SerialNumber; then Sequence*.
+    set fmt to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensID|$FocusDistance2|$GPSPosition|$SerialNumber"
     set cmd to quoted form of exif & " -m -s3 -p " & quoted form of fmt & " " & quoted form of posixPath
     try
         set meta to do shell script cmd
     on error errMsg
-        set fmt2 to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensModel"
+        set fmt2 to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensModel|$FocusDistance2|$GPSPosition|$SerialNumber"
         set cmd2 to quoted form of exif & " -m -s3 -p " & quoted form of fmt2 & " " & quoted form of posixPath
         try
             set meta to do shell script cmd2
@@ -357,7 +475,11 @@ on metadataLine(posixPath)
 
     set seqFields to my readSequenceFields(posixPath)
     set meta to meta & "|" & (item 1 of seqFields) & "|" & (item 2 of seqFields) & "|" & (item 3 of seqFields)
-    return "OK" & tab & posixPath & tab & meta
+    -- Fourth/fifth fields: NOTE and CAPTION bodies from Description (legacy plain = note)
+    set descParts to my parseDescriptionSections(my readDescriptionRaw(posixPath))
+    set noteOnly to item 1 of descParts
+    set captionOnly to item 2 of descParts
+    return "OK" & tab & posixPath & tab & meta & tab & noteOnly & tab & captionOnly
 end metadataLine
 
 -- Returns {Sequence, SequenceID, SequencePos} from Keywords/Subject

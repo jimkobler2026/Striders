@@ -36,11 +36,17 @@ There is **no** checked-in working `Strider_Media_Catalog.xlsm` anymore (removed
 
 **Quirk already handled:** with MWG, `-MWG:Keywords=` + `-MWG:Keywords+=…` in one command does **not** clear; must replace the full list in one `-MWG:Keywords=…` (or two-pass clear then add).
 
-Next agent: start at **item 2**. Run `./scripts/install_mac_helpers.sh` and ask the user to restart Excel after any helper edit.
+**Exiftool feature queue is complete** (item 14 HierarchicalSubject skipped — only if user wants LR trees).
+
+**NOTE:/CAPTION: Description embed (2026-11-10):** `MWG:Description` holds optional `NOTE:` (Entry notes / Append) and `CAPTION:` (Ctrl+Shift+Y / `writeCaption`). Append merges NOTE and preserves CAPTION; Y merges CAPTION and preserves NOTE; Load fills Entry Note from NOTE (legacy unprefixed Description → Note). Also: `caption_photo.py --write`. Helpers: reinstall `install_mac_helpers.sh`.
+
+User action still needed: restart Excel, re-import `CatalogMacros.bas`, run **`AssignMacroShortcuts`**, smoke **I → W** and **Y** (embed + sheet).
 
 ### Media root
 
-Ingest folders live under `~/Pictures/environmental caustics/`. Sequence retag of all image folders was completed 2026-11-10 (largest: `purgatory_striders_11022026`, 104 sequences / 1551 frames) under the **old gap heuristic**. After item 1 (SequenceNumber), sequences will need a full re-identify/`--write --force` pass — **defer until the exiftool feature queue is complete** (item 2 batched writes will make that practical). Prefer **copies under `/tmp`** for write tests — do not rewrite whole ingest folders unless the user asks. Prefer the term **ingest folder** over “dump.”
+Ingest folders live under `~/Pictures/environmental caustics/`. Sequence re-identify with SequenceNumber boundaries completed **2026-11-10** (`tag_sequences.py --recursive --write --force`; stay_open). Largest: `purgatory_striders_11022026` (1663 files / ~104 sequences). Prefer the term **ingest folder** over “dump.”
+
+**Entry auto layout (blank):** row 12 Name | Camera | Serial Number (E12/F12, bold label); row 18 Focus Distance | GPS; blank spacer before tag section (currently row 22).
 
 ### Bootstrap after pull / helper edits
 
@@ -85,180 +91,61 @@ Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subjec
 
 ### 2. Faster exiftool writes (`-stay_open` / batched `-execute`)
 
-**Status:** TODO  
-**Goal:** Speed up per-file writes in `tag_sequences.py` (and optionally Append helpers) by avoiding one process spawn per file.
+**Status:** **DONE** on `main` (uncommitted until user asks)  
+**Goal:** Speed up per-file writes in `tag_sequences.py` by avoiding one process spawn per file.
 
-**Why:** Full-tree sequence write took ~46 minutes largely due to process overhead.
-
-**Likely files:** `scripts/tag_sequences.py`; optionally a tiny shared helper module; **not** required to change AppleScript on the first pass if CLI gains are enough.
-
-**Hints:**
-- Prefer batching many files in fewer invocations, or `-stay_open True -@ -` with `-execute`.
-- Preserve MWG full-list Keyword replace semantics from item 10.
-- Keep dry-run path unchanged.
-
-**Test:**
-1. Time write on a `/tmp` copy of ~50–100 previously tagged frames; confirm wall time drops vs one-process-per-file baseline.
-2. Spot-check 5 files: Keywords/Subject Sequence* correct; no `_original` leftovers (`-overwrite_original`).
-3. Run once with intentional bad path / empty folder — must error cleanly, not hang on stay_open.
-
-**Regression gate** after this item.
+**Done in:** `scripts/tag_sequences.py` (`ExifToolStayOpen`), README. AppleScript Append left unchanged.  
+**Behavior:** Reuses Keywords/Subject from the collect JSON pass; `--write` uses one `-stay_open True -@ -` session with per-file MWG full-list replace. **Do not put `--` before the path** in stay_open/`-execute` arg lists — it makes `-execute` look like a filename and hangs.  
+**Tests:** 80 files `/tmp` write ~10.5s; 31-frame burst write OK (5/15/11); empty folder / bad path clean; MWG round-trip OK.
 
 ---
 
 ### 3. `FocusDistance2` on Load / catalog
 
-**Status:** TODO  
-**Goal:** Surface Sony `FocusDistance2` (subject distance) on Entry Load and as a Photos column (and write-back only if it is treated as a user field — prefer **read-only auto** like Lens/Speed).
+**Status:** **DONE** (helpers reinstalled; user Excel smoke pending)  
+**Goal:** Surface Sony `FocusDistance2` as read-only auto field **Focus Distance** on Entry Load + Photos column.
 
-**Why:** Highly relevant to caustics / strider working distance; present on sampled A7RIV frames.
-
-**Likely files:** `catalog/macros/StriderFinderMeta.applescript` (photo metadata format string); `CatalogMacros.bas` (parse Load); `add_catalog_field` / blank layout or `build_catalog.py` if adding a column; Lists only if click-pick (probably not).
-
-**Hints:**
-- Prefer auto field (A/B or C/D) filled on Load, not a Keyword write-back, unless user asks to persist it.
-- Display units clearly (exiftool usually returns e.g. `1.654 m`).
-
-**Test:**
-1. `exiftool -FocusDistance2` on a known Sony JPG; Load that file into Entry (I/Q) and confirm the field fills.
-2. Append (W): Photos row gets the value if it’s a catalog column; confirm Keywords were **not** polluted with FocusDistance unless intentionally designed.
-3. Load a phone JPG without the tag — field blank, no error.
-
-**Regression gate** after this item.
+**Done in:** `StriderFinderMeta.applescript` (meta index 12; Sequence* → 13–15), `CatalogMacros.bas` (Load + exclusions), blank `.xlsm` Entry row 18 + Photos column, `build_catalog.py`, README.  
+**Tests:** Helper `readPath` returns `2.621 m` for Sony sample; phone blank FocusDistance slot; MWG/sequence regression OK. **User:** restart Excel, re-import `CatalogMacros.bas`, smoke **I → W** (Focus Distance fills; Keywords not polluted).
 
 ---
 
 ### 4. Phone GPS → catalog / Locale assist
 
-**Status:** TODO  
-**Goal:** On Load (and optionally batch script), read `GPSPosition` / lat / lon from geotagged files (iPhone ingest folders already have GPS). Optionally suggest or fill Locale.
+**Status:** **DONE** (helpers reinstalled; user Excel smoke pending)  
+**Goal:** On Load, read `GPSPosition` into a catalog **GPS** field (no Locale auto-fill).
 
-**Why:** Phone caustics under `environmental caustics/phone caustics*` are geotagged; mirrorless ingest folders usually are not.
-
-**Likely files:** `StriderFinderMeta.applescript`; `CatalogMacros.bas`; maybe Photos columns `GPSLatitude` / `GPSLongitude` or a single `GPS` text field; README.
-
-**Hints:**
-- Do not overwrite a non-empty Locale without an explicit user action.
-- Reverse-geocode is optional (exiftool geolocation API / external); lat/lon storage alone is valuable.
-- Videos: QuickTime GPS may differ — check phone MOV samples.
-
-**Test:**
-1. Load a known phone file with GPS (e.g. under `phone caustics 11042026`); Entry shows coordinates (and Locale only if auto-fill is implemented and Locale was empty).
-2. Load a Sony brook JPG without GPS — blank GPS fields, existing Locale untouched.
-3. Append (W): row stores GPS as designed; MWG Keywords still OK.
-
-**Regression gate** after this item.
+**Done in:** `StriderFinderMeta.applescript` (meta idx 13), `CatalogMacros.bas`, blank Entry C18 + Photos column, `build_catalog.py`, README. Locale never overwritten from GPS.  
+**Tests:** Phone `readPath` includes `42 deg 17'…`; Sony GPS slot blank; Focus Distance still idx 12.
 
 ---
 
 ### 5. Preserve / restore file times after metadata writes
 
-**Status:** TODO  
-**Goal:** Stop Append / `tag_sequences` from making Finder “Date Modified” = now; use `-P` and/or set `FileModifyDate` from `DateTimeOriginal` after writes.
+**Status:** **DONE**  
+**Goal:** Stop Append / `tag_sequences` from making Finder “Date Modified” = now.
 
-**Why:** Sequence retag already bumped mtimes on large ingest folders; breaks capture-time Finder sorting.
-
-**Likely files:** `StriderFinderMeta.applescript` (`writeTagsToFile`); `scripts/tag_sequences.py`; any other writers (`rename_media_unique` should keep content times sensible).
-
-**Hints:**
-- `-P` preserves existing FileModifyDate/FileCreateDate through the write.
-- Or `-FileModifyDate<DateTimeOriginal` (and Mac creation date APIs if desired).
-- Decide one policy and document it.
-
-**Test:**
-1. Copy a JPG to `/tmp`; note `exiftool -FileModifyDate -DateTimeOriginal`.
-2. Run writeTags-equivalent / `tag_sequences --write` on the copy; confirm FileModifyDate policy holds (unchanged with `-P`, or equals capture time if restoring).
-3. Confirm Keywords still updated.
-
-**Regression gate** after this item.
+**Policy:** exiftool **`-P`** (preserve existing FileModifyDate/FileCreateDate).  
+**Done in:** `StriderFinderMeta.applescript` `writeTagsToFile`, `tag_sequences.py` `mwg_keyword_args`, README.  
+**Tests:** `/tmp` copy touched to 2026-01-01 12:00; after `--write` FileModifyDate unchanged; Keywords updated.
 
 ---
 
 ### 6. `ImageDataHash` for duplicate detection
 
-**Status:** TODO  
-**Goal:** Add a script (or flag) that reports duplicate image **content** via `ImageDataHash` (hash of image data, ignoring metadata/filename).
-
-**Why:** Overlapping `temp photos*` folders can hold duplicate JPGs under different names after renames. Not for JPEG↔RAW matching.
-
-**Likely files:** new `scripts/find_duplicate_media.py` (or similar); README one-liner.
-
-**Hints:**
-- `exiftool -ImageDataHash -r -csv` / JSON in batches; group by hash.
-- Default dry-run report only; deletion must be explicit and cautious.
-
-**Test:**
-1. Copy one JPG twice to `/tmp/a.jpg` `/tmp/b.jpg`; script reports them as duplicates.
-2. Change Keywords on a third copy — hash should still match (metadata-independent).
-3. Two different photos — different hashes. Exit 0 on report-only.
-
-**Regression gate** (script-only: run sequence dry-run + one MWG keyword read still works).
-
----
+**Status:** **DONE** — `scripts/find_duplicate_media.py` (report only).
 
 ### 7. `-TagsFromFile` sibling copy (CLI complement to Ctrl+Shift+S)
 
-**Status:** TODO  
-**Goal:** CLI to copy catalog Keywords (and optionally notes/rating/location) from a tagged **1/n** (or any) file onto SequenceID siblings or onto matching RAW/JPG mates — without Excel.
-
-**Why:** Bulk metadata on disk when Excel isn’t open; useful for RAW+JPG pairs.
-
-**Likely files:** new `scripts/copy_sequence_tags.py` or extend `list_sequence_members.py`; README.
-
-**Hints:**
-- Prefer copying MWG:Keywords / Description / Rating / Location, not entire EXIF (don’t clobber camera Make/Model/datetime).
-- Default dry-run.
-
-**Test:**
-1. `/tmp` sequence of 4 copies; tag only frame 1 with Species/Behavior Keywords; run tool; frames 2–4 get same user Keywords; each keeps own SequencePos if already set (define behavior clearly).
-2. Dry-run prints actions and writes nothing.
-3. Refuse to run outside allowed roots if you mirror `rename_media_unique` safety — or document unrestricted paths.
-
-**Regression gate** after this item.
-
----
+**Status:** **DONE** — `scripts/copy_sequence_tags.py` (MWG user tags; keeps each SequencePos; dry-run default; unrestricted paths — use care).
 
 ### 8. Embedded preview extract for captions / thumbs
 
-**Status:** TODO  
-**Goal:** Prefer Sony/JPEG embedded `PreviewImage` (or similar) for `caption_photo.py` instead of sending full ~40 MB masters when a preview exists.
-
-**Why:** Faster/cheaper vision API calls; less I/O.
-
-**Likely files:** `scripts/caption_photo.py`; maybe `StriderCaption.sh`.
-
-**Hints:**
-- `exiftool -b -PreviewImage` → temp JPG; fall back to full file if missing.
-- Clean up temp files; keep `--plain` / `--machine` behavior identical aside from source pixels.
-
-**Test:**
-1. On a Sony JPG with PreviewImage: caption run uses preview (log or debug flag); still returns a caption with API keys present — if no keys, at least verify preview extraction size ≪ original.
-2. Phone JPG with no PreviewImage: falls back to full file, no crash.
-3. Excel Ctrl+Shift+Y path still works if shell bridge unchanged (or update bridge and smoke once).
-
-**Regression gate** after this item.
-
----
+**Status:** **DONE** — `caption_photo.py` prefers `PreviewImage` / `JpgFromRaw` / `OtherImage`; `--debug-preview`; phone falls back to master.
 
 ### 9. Honor `OffsetTimeOriginal` in rename / sequence IDs
 
-**Status:** TODO  
-**Goal:** Apply timezone offset when parsing capture times for `rename_media_unique.py` and `tag_sequences.py` SequenceID / clustering.
-
-**Why:** Sample files carry `OffsetTimeOriginal` (e.g. `-04:00`); naive local parse can drift across DST/travel.
-
-**Likely files:** `scripts/rename_media_unique.py`, `scripts/tag_sequences.py` (shared datetime helper if practical).
-
-**Hints:**
-- Prefer timezone-aware datetimes; SequenceID format can stay `YYYYMMDD-HHMMSS` in local/offset-adjusted time — document which.
-- Don’t change filenames on disk unless user runs rename `--write` again.
-
-**Test:**
-1. Unit-style: file with known `DateTimeOriginal` + `OffsetTimeOriginal` → parsed instant matches expectation.
-2. Dry-run rename on a small folder — prefixes stable/sensible vs previous behavior (call out intentional changes).
-3. Sequence dry-run still clusters the same bursts on a Sony continuous folder (no mass split/merge surprise).
-
-**Regression gate** after this item.
+**Status:** **DONE** — `scripts/exif_datetime.py`; used by `tag_sequences.py` + `rename_media_unique.py`. SequenceID / rename stamp = camera wall clock (`stamp_local`); gaps use offset-aware datetimes when OffsetTimeOriginal present.
 
 ---
 
@@ -276,74 +163,23 @@ Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subjec
 
 ### 11. Geotag mirrorless ingest folders from GPX / phone track
 
-**Status:** TODO (situational)  
-**Goal:** Optional script: `exiftool -geotag track.gpx` (with time drift options) onto Sony ingest folders when a phone/GPS track exists for the shoot.
-
-**Why:** A7RIV brook/river stills lack GPS; phone in pocket can provide a track.
-
-**Likely files:** new `scripts/geotag_dump.py`; README safety notes.
-
-**Hints:**
-- Dry-run / backup; geotag is destructive to GPS fields.
-- Document timezone/`-geosync` needs.
-- Only run when user supplies a track file.
-
-**Test:**
-1. With a small GPX fixture and `/tmp` images with known times, dry-run then write; `exiftool -GPSPosition` populated.
-2. Images outside track time range left without GPS (or warned).
-3. No change to Keywords/Sequence*.
-
-**Regression gate** after this item.
-
----
+**Status:** **DONE** — `scripts/geotag_ingest.py` (dry-run default; `--geosync`; destructive GPS — test on `/tmp` first).
 
 ### 12. `SerialNumber` on Load / catalog
 
-**Status:** TODO (situational)  
-**Goal:** Show camera body serial on Load / Photos for multi-body distinction.
-
-**Likely files:** `StriderFinderMeta.applescript` metadata format; Entry + Photos column via AddCatalogField pattern (auto field).
-
-**Test:** Load Sony JPG → serial matches `exiftool -SerialNumber`. Phone may differ or blank — no error. Append doesn’t write serial into Keywords.
-
-**Regression gate** after this item.
-
----
+**Status:** **DONE** — meta idx 14 → Entry **Serial Number** (E18) + Photos column; not Keyword write-back. Helper returns `03391080` on sample Sony.
 
 ### 13. Artist / Copyright stamp on ingest
 
-**Status:** TODO (situational)  
-**Goal:** Optional ingest stamp (`MWG:Creator` / `MWG:Copyright` or Artist/Copyright) via rename or a small `stamp_ownership.py`, configured by env or repo config (not hard-coded secrets).
-
-**Test:** `/tmp` copy stamped; `exiftool -Artist -Copyright -MWG:Creator -MWG:Copyright` shows values; second run idempotent; unrelated Keywords preserved.
-
-**Regression gate** after this item.
-
----
+**Status:** **DONE** — `scripts/stamp_ownership.py` via `STRIDER_ARTIST` / `STRIDER_COPYRIGHT` or flags.
 
 ### 14. HierarchicalSubject (Lightroom-style trees)
 
-**Status:** TODO (situational — only if user wants LR hierarchy)  
-**Goal:** Optionally mirror flat `Key:value` Keywords into `XMP-lr:HierarchicalSubject` or MWG hierarchical keywords (e.g. `Species|Aquarius remigis`).
-
-**Hints:** Do **not** replace flat Keywords the catalog depends on; additive only. Confirm Preview/Excel Load still parse Sequence* from IPTC/XMP Subject.
-
-**Test:** After write, flat Keywords unchanged; hierarchical tag present; Load + Append still round-trip Species/Sequence*.
-
-**Regression gate** after this item.
-
----
+**Status:** **SKIPPED** — only if user explicitly wants LR hierarchy later.
 
 ### 15. `-diff` smoke test after write-back changes
 
-**Status:** TODO (situational / tooling)  
-**Goal:** Add a small script or documented command that copies a file, runs the catalog write payload, and uses `exiftool -diff` (minus noisy system tags) to show what changed — for CI-less regression when touching write-back.
-
-**Likely files:** `scripts/test_tag_writeback.py` or a README “Dev testing” snippet.
-
-**Test:** Run the tool itself against `/tmp` copy; assert expected tags appear in diff (Rating/Description/Keywords) and camera Make/Model/DateTimeOriginal do not flip unexpectedly.
-
-**Regression gate** after this item.
+**Status:** **DONE** — `scripts/test_tag_writeback.py`.
 
 ---
 
@@ -369,19 +205,20 @@ Minimum bar — adapt paths if blank/working book differs:
 |---|---|---|---|
 | 10 MWG write path | 2026-11-10 | Done | Full-list Keyword replace; helpers reinstalled |
 | 1 SequenceNumber | 2026-11-10 | Done | Burst on cam SeqNum reset; filename # for order; gap fallback |
-| 2 stay_open / batch writes | | | |
-| 3 FocusDistance2 | | | |
-| 4 Phone GPS | | | |
-| 5 File times `-P` | | | |
-| 6 ImageDataHash | | | |
-| 7 TagsFromFile siblings | | | |
-| 8 PreviewImage captions | | | |
-| 9 OffsetTimeOriginal | | | |
-| 11 Geotag GPX | | | |
-| 12 SerialNumber | | | |
-| 13 Artist/Copyright | | | |
-| 14 HierarchicalSubject | | | |
-| 15 `-diff` writeback test | | | |
+| 2 stay_open / batch writes | 2026-11-10 | Done | stay_open MWG writes; reuse collect keywords; no `--` before path |
+| 3 FocusDistance2 | 2026-11-10 | Done | Auto field; meta idx 12; Excel smoke pending |
+| 4 Phone GPS | 2026-11-10 | Done | GPSPosition → GPS; Locale untouched; Excel smoke pending |
+| 5 File times `-P` | 2026-11-10 | Done | -P on Append + tag_sequences |
+| 6 ImageDataHash | 2026-11-10 | Done | find_duplicate_media.py report-only |
+| 7 TagsFromFile siblings | 2026-11-10 | Done | copy_sequence_tags.py |
+| 8 PreviewImage captions | 2026-11-10 | Done | embedded preview + --debug-preview |
+| 9 OffsetTimeOriginal | 2026-11-10 | Done | exif_datetime.py shared helper |
+| 11 Geotag GPX | 2026-11-10 | Done | geotag_ingest.py dry-run default |
+| 12 SerialNumber | 2026-11-10 | Done | Serial Number Load field; Excel smoke pending |
+| 13 Artist/Copyright | 2026-11-10 | Done | stamp_ownership.py |
+| 14 HierarchicalSubject | 2026-11-10 | Skipped | Wait for explicit LR ask |
+| 15 `-diff` writeback test | 2026-11-10 | Done | test_tag_writeback.py |
+| NOTE/CAPTION Description embed | 2026-11-10 | Done | writeCaption + Append NOTE merge; Load NOTE; caption_photo --write |
 
 ---
 
@@ -394,7 +231,7 @@ Minimum bar — adapt paths if blank/working book differs:
 | S | AppendPhotoSequence (tags from Entry / 1/n) |
 | E / U / R | Video load / append |
 | O / J / D | Preview / Finder / trash |
-| Y | Captions |
+| Y | Captions sheet + embed CAPTION: |
 | K | AddCatalogField |
 
 Helpers: `~/Library/Application Scripts/com.microsoft.Excel/`  
