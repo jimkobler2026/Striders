@@ -695,7 +695,7 @@ Public Sub AppendPhotoSequence()
     End If
     If UBound(parts) < 2 Then
         MsgBox "No files found for SequenceID " & seqID & " in that folder." & vbCrLf & _
-               "Run tag_sequences.py --write on the dump first.", vbExclamation
+               "Run tag_sequences.py --write on the ingest folder first.", vbExclamation
         Exit Sub
     End If
 

@@ -36,11 +36,11 @@ There is **no** checked-in working `Strider_Media_Catalog.xlsm` anymore (removed
 
 **Quirk already handled:** with MWG, `-MWG:Keywords=` + `-MWG:Keywords+=…` in one command does **not** clear; must replace the full list in one `-MWG:Keywords=…` (or two-pass clear then add).
 
-Next agent: start at **item 1**. Run `./scripts/install_mac_helpers.sh` and ask the user to restart Excel after any helper edit.
+Next agent: start at **item 2**. Run `./scripts/install_mac_helpers.sh` and ask the user to restart Excel after any helper edit.
 
 ### Media root
 
-Dumps live under `~/Pictures/environmental caustics/`. Sequence retag of all image folders was completed 2026-11-10 (largest: `purgatory_striders_11022026`, 104 sequences / 1551 frames). Prefer **copies under `/tmp`** for write tests — do not rewrite whole dumps unless the user asks.
+Ingest folders live under `~/Pictures/environmental caustics/`. Sequence retag of all image folders was completed 2026-11-10 (largest: `purgatory_striders_11022026`, 104 sequences / 1551 frames) under the **old gap heuristic**. After item 1 (SequenceNumber), sequences will need a full re-identify/`--write --force` pass — **defer until the exiftool feature queue is complete** (item 2 batched writes will make that practical). Prefer **copies under `/tmp`** for write tests — do not rewrite whole ingest folders unless the user asks. Prefer the term **ingest folder** over “dump.”
 
 ### Bootstrap after pull / helper edits
 
@@ -62,38 +62,24 @@ Smoke (user or agent-guided): Load (I/Q) → click-pick → Append (W); sequence
 5. Do not run `setup_workbook.sh` with `--force` unless explicitly requested.
 6. Sandbox: renaming/writing under `~/Pictures/…` needs full permissions (`all`).
 7. Leave a short note under **Progress log** (bottom) after each item.
+8. **Multi-camera:** Expect Canon and other bodies alongside Sony; phones include **iPhone 12 Pro Max** and **iPhone 18 Pro Max** (often geotagged; usually not Continuous sequence-tagged). Prefer generic exiftool tags and fallbacks (e.g. SequenceNumber when present, gap otherwise; filename camera number for order). Do **not** hard-code Sony-only assumptions or chase per-model maker-note details until a real ingest folder shows a problem.
 
 ---
 
 ## Exiftool feature queue (15)
 
-Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subject, Rating/Description/Location, and Load exposure/lens fields. These items deepen that. Camera samples are mostly **Sony ILCE-7RM4**; phone dumps are **Apple** with GPS.
+Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subject, Rating/Description/Location, and Load exposure/lens fields. These items deepen that. Camera samples are mostly **Sony ILCE-7RM4**; phone ingest folders are **Apple** (iPhone 12/18 Pro Max) with GPS.
 
 ---
 
 ### 1. Sony `SequenceNumber` for sequence tagging
 
-**Status:** TODO  
-**Goal:** Use maker-note `SequenceNumber` (resets to **1** at each burst start on A7RIV) to harden `tag_sequences.py` beyond the 1 s capture-time gap heuristic; optionally align `SequencePos` with camera counters when trustworthy.
+**Status:** **DONE** on `main`  
+**Goal:** Use maker-note `SequenceNumber` (resets to **1** at each burst start on A7RIV) to harden `tag_sequences.py` beyond the 1 s capture-time gap heuristic.
 
-**Why:** Gap-only clustering can mis-merge/split bursts; Sony already numbers frames within a continuous burst.
-
-**Likely files:** `scripts/tag_sequences.py`; maybe `README.md` sequence section.
-
-**Hints:**
-- Read `-SequenceNumber` (and keep `-ReleaseMode`) in the collect pass.
-- Treat a return to `SequenceNumber == 1` (while still Continuous) as a strong burst boundary; still require `--min-frames` (default 4).
-- JPEG+RAW pairs can share a capture instant but may share or duplicate sequence numbers — verify on a real dump before assuming 1:1 with `SequencePos`.
-- Keep gap threshold as fallback for cameras without `SequenceNumber`.
-
-**Test:**
-1. Dry-run on a known folder, e.g. `purgatory_striders_11022026` (or a small subfolder):  
-   `python3 scripts/tag_sequences.py "<path>" --recursive`  
-   Compare sequence count / IDs to a prior run or spot-check that burst starts match files where `SequenceNumber=1`.
-2. On a **copy** of 20–40 frames under `/tmp`: `--write` and confirm Keywords `Sequence*` via `exiftool -Keywords -Subject` and `SequenceNumber`.
-3. Confirm `--min-frames 4` still marks 2–3 frame clusters as `Sequence:no`.
-
-**Regression gate** after this item.
+**Done in:** `scripts/tag_sequences.py`, `README.md` sequence section.  
+**Behavior:** Burst split on `SequenceNumber == 1` or counter drop when both frames have the tag; `--gap` only if absent. Within a burst, `SequencePos` order uses the filename camera number (`…_DSC7659`), not timestamp alone.  
+**Tests:** Dry-run on `temp photos 11052026/DCIM/100MSDCF` (32 sequences); `/tmp` write of 31 frames → 3 bursts (5/15/11) with `camSeq` matching `SequencePos`; 3-frame folder → `Sequence:no`; MWG round-trip OK.
 
 ---
 
@@ -145,9 +131,9 @@ Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subjec
 ### 4. Phone GPS → catalog / Locale assist
 
 **Status:** TODO  
-**Goal:** On Load (and optionally batch script), read `GPSPosition` / lat / lon from geotagged files (iPhone dumps already have GPS). Optionally suggest or fill Locale.
+**Goal:** On Load (and optionally batch script), read `GPSPosition` / lat / lon from geotagged files (iPhone ingest folders already have GPS). Optionally suggest or fill Locale.
 
-**Why:** Phone caustics under `environmental caustics/phone caustics*` are geotagged; mirrorless dumps usually are not.
+**Why:** Phone caustics under `environmental caustics/phone caustics*` are geotagged; mirrorless ingest folders usually are not.
 
 **Likely files:** `StriderFinderMeta.applescript`; `CatalogMacros.bas`; maybe Photos columns `GPSLatitude` / `GPSLongitude` or a single `GPS` text field; README.
 
@@ -170,7 +156,7 @@ Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subjec
 **Status:** TODO  
 **Goal:** Stop Append / `tag_sequences` from making Finder “Date Modified” = now; use `-P` and/or set `FileModifyDate` from `DateTimeOriginal` after writes.
 
-**Why:** Sequence retag already bumped mtimes on large dumps; breaks capture-time Finder sorting.
+**Why:** Sequence retag already bumped mtimes on large ingest folders; breaks capture-time Finder sorting.
 
 **Likely files:** `StriderFinderMeta.applescript` (`writeTagsToFile`); `scripts/tag_sequences.py`; any other writers (`rename_media_unique` should keep content times sensible).
 
@@ -288,10 +274,10 @@ Context: catalog already uses exiftool for dates, `ReleaseMode`, Keywords/Subjec
 
 ---
 
-### 11. Geotag mirrorless dumps from GPX / phone track
+### 11. Geotag mirrorless ingest folders from GPX / phone track
 
 **Status:** TODO (situational)  
-**Goal:** Optional script: `exiftool -geotag track.gpx` (with time drift options) onto Sony dump folders when a phone/GPS track exists for the shoot.
+**Goal:** Optional script: `exiftool -geotag track.gpx` (with time drift options) onto Sony ingest folders when a phone/GPS track exists for the shoot.
 
 **Why:** A7RIV brook/river stills lack GPS; phone in pocket can provide a track.
 
@@ -382,7 +368,7 @@ Minimum bar — adapt paths if blank/working book differs:
 | Item | Date | Result | Notes |
 |---|---|---|---|
 | 10 MWG write path | 2026-11-10 | Done | Full-list Keyword replace; helpers reinstalled |
-| 1 SequenceNumber | | | |
+| 1 SequenceNumber | 2026-11-10 | Done | Burst on cam SeqNum reset; filename # for order; gap fallback |
 | 2 stay_open / batch writes | | | |
 | 3 FocusDistance2 | | | |
 | 4 Phone GPS | | | |

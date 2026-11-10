@@ -15,7 +15,7 @@ Agent session notes: `[HANDOFF.md](HANDOFF.md)`.
 ### Big picture
 
 ```text
-Camera card → temp dump folder under ~/Pictures/environmental caustics
+Camera card → temp ingest folder under ~/Pictures/environmental caustics
     → rename_media_unique.py   (unique basenames)
     → tag_sequences.py         (optional: Sequence* keywords)
     → Preview cull + Excel Entry/VideoEntry
@@ -36,14 +36,14 @@ Those helpers run exiftool (and, for captions, a small shell bridge into `script
 2. **Click-pick vocabularies** — Options live on **Lists** and on Entry/VideoEntry columns C+; clicking an option copies into the value cell (column B, or D/F for side-by-side auto fields).
 3. **Append does two things** — Adds/updates a row on **Photos** or **Videos**, and writes tagged metadata back into the media file (Rating, Description/notes, Location, Keywords).
 4. **Fields are discovered at runtime** — Macros read Entry/VideoEntry labels (columns A/C/E) and Lists headers. New click-pick tags do not require editing VBA or AppleScript key lists (after the one-time dynamic-field upgrade).
-5. **Append matches by filename** — Re-appending the same basename updates that catalog row. That is why dumps are renamed before ingest when camera names recycle.
+5. **Append matches by filename** — Re-appending the same basename updates that catalog row. That is why ingest folders are renamed before cataloguing when camera names recycle.
 6. **Captions are optional and on demand** — Select Photos rows → Ctrl+Shift+Y; the Captions sheet is created if missing.
 
 
 
 ### Recommended ingest loop
 
-1. Copy card contents into a folder under `~/Pictures/environmental caustics/…`.
+1. Copy card contents into an ingest folder under `~/Pictures/environmental caustics/…`.
 2. Rename for uniqueness (`rename_media_unique.py --recursive --write`).
 3. Optionally tag continuous bursts (`tag_sequences.py --recursive --write`; default minimum **4** frames).
 4. Open a **copy** of the blank `.xlsm` (your working catalog).
@@ -61,7 +61,7 @@ Two separate steps: **tag bursts on disk**, then **bulk-append into Excel** usin
 
 ### 1. Tag sequences on disk (`tag_sequences.py`)
 
-Scans a dump folder for Continuous / Hi / Hi+ frames, clusters them by capture-time gap (default 1 s), and writes Keywords:
+Scans an ingest folder for Continuous / Hi / Hi+ frames and writes Keywords. Burst boundaries prefer the camera’s `SequenceNumber` (resets to **1** at each new burst on Sony A7RIV); capture-time `--gap` (default 1 s) is used only when that tag is absent. Order inside a burst follows the original camera number in the filename (`…_DSC7659`).
 
 | Keyword | Example | Meaning |
 |---------|---------|---------|
@@ -71,17 +71,17 @@ Scans a dump folder for Continuous / Hi / Hi+ frames, clusters them by capture-t
 
 Rules that matter in practice:
 
-- Only Continuous/Hi/Hi+ are eligible; single-shot and phone dumps usually stay untagged.
-- Default **`--min-frames 4`**: clusters of 2–3 get `Sequence:no` (no ID/pos).
+- Only Continuous/Hi/Hi+ are eligible; single-shot and phone ingest folders usually stay untagged.
+- Default **`--min-frames 4`**: bursts of 2–3 get `Sequence:no` (no ID/pos).
 - JPEG+RAW pairs at the same instant count as two frames toward the minimum.
 - Dry-run by default; add `--write` (and `--force` to rewrite existing Sequence* tags).
-- Use `--recursive` for nested DCIM-style dumps.
+- Use `--recursive` for nested DCIM-style ingest folders.
 
 ```bash
-# One dump
-python3 scripts/tag_sequences.py "~/Pictures/environmental caustics/my-dump" --recursive --write
+# One ingest folder
+python3 scripts/tag_sequences.py "~/Pictures/environmental caustics/my-shoot" --recursive --write
 
-# All dumps under environmental caustics
+# All ingest folders under environmental caustics
 for d in ~/Pictures/environmental\ caustics/*/; do
   python3 scripts/tag_sequences.py "$d" --recursive --write --force
 done
@@ -93,7 +93,7 @@ Inspect afterward with `list_sequences.py` (CSV of SequenceID / bounds / counts)
 
 Goal: tag the representative frame once, then append every sibling with the same user metadata.
 
-1. Run `tag_sequences.py --write` on the dump first (so SequenceID / SequencePos exist).
+1. Run `tag_sequences.py --write` on the ingest folder first (so SequenceID / SequencePos exist).
 2. In Preview (or Finder), open the **1/n** frame of a sequence.
 3. **Ctrl+Shift+I** (or **Q**) to load it into Entry — Sequence* fields fill from the file.
 4. Click-pick Species, Behavior, Locale, caustic fields, notes, etc. on that one frame.
@@ -270,8 +270,8 @@ Then restart Excel.
 | Script                                                     | Touches workbook?             | Purpose                                                                                                                                         |
 | ---------------------------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `[install_mac_helpers.sh](scripts/install_mac_helpers.sh)` | No                            | Compile/install AppleScript helpers + caption shell bridge                                                                                      |
-| `[rename_media_unique.py](scripts/rename_media_unique.py)` | No                            | Prefix `YYYYMMDD-HHMMSS_` onto media under `~/Pictures/environmental caustics` (dry-run default; `--write`; `--recursive` for DCIM-style dumps) |
-| `[tag_sequences.py](scripts/tag_sequences.py)`             | No                            | Tag Continuous/Hi/Hi+ bursts by capture gap; `--min-frames` default **4**; writes Sequence* Keywords                                            |
+| `[rename_media_unique.py](scripts/rename_media_unique.py)` | No                            | Prefix `YYYYMMDD-HHMMSS_` onto media under `~/Pictures/environmental caustics` (dry-run default; `--write`; `--recursive` for DCIM-style ingest folders) |
+| `[tag_sequences.py](scripts/tag_sequences.py)`             | No                            | Tag Continuous/Hi/Hi+ bursts via `SequenceNumber` (gap fallback); `--min-frames` default **4**; writes Sequence* Keywords                      |
 | `[list_sequences.py](scripts/list_sequences.py)`           | No                            | CSV of SequenceID / start / end / frame count from Keywords                                                                                     |
 | `[list_sequence_members.py](scripts/list_sequence_members.py)` | No                        | Paths + SequencePos for one SequenceID (used by AppendPhotoSequence)                                                                            |
 | `[caption_photo.py](scripts/caption_photo.py)`             | No*                           | Vision caption CLI (`--machine` for Excel). Can optionally read workbook metadata for context                                                   |
@@ -296,11 +296,11 @@ Then restart Excel.
 ### Example commands
 
 ```bash
-# Unique names (nested DCIM dumps)
-python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/my-dump" --recursive --write
+# Unique names (nested DCIM ingest folders)
+python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/my-shoot" --recursive --write
 
 # Sequences (≥4 frames)
-python3 scripts/tag_sequences.py "~/Pictures/environmental caustics/my-dump" --recursive --write
+python3 scripts/tag_sequences.py "~/Pictures/environmental caustics/my-shoot" --recursive --write
 
 # Captions from Terminal
 python3 scripts/caption_photo.py /path/to/photo.JPG --plain
@@ -343,7 +343,7 @@ API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `Strider
 | --------------------------------------------------------------------- | ----------------------------------------------- |
 | `~/Library/Application Scripts/com.microsoft.Excel/Strider*.scpt`     | Compiled helpers Excel may call                 |
 | `~/Library/Application Scripts/com.microsoft.Excel/StriderCaption.sh` | Caption bridge script                           |
-| `~/Pictures/environmental caustics/`                                  | Allowed root for `rename_media_unique.py` dumps |
+| `~/Pictures/environmental caustics/`                                  | Allowed root for `rename_media_unique.py` ingest folders |
 | `../Virtual_Nexus/.env`                                               | Preferred API key file for captions             |
 
 

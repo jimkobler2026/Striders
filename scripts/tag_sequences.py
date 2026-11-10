@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Tag photo sequences from capture-time proximity (hi / hi+ / Continuous).
+"""Tag photo sequences from Continuous / Hi / Hi+ bursts.
+
+Primary boundary (Sony and similar): maker-note SequenceNumber, which resets
+to 1 at each new burst. Capture-time --gap is the fallback when SequenceNumber
+is absent (phones, non-Sony). Within a burst, order follows the original camera
+number embedded in the filename (…_DSC7659), not timestamp alone.
 
 Dry-run by default. Writes Keywords/Subject:
   Sequence:yes|no, SequenceID:YYYYMMDD-HHMMSS, SequencePos:i/n
 
-Clusters shorter than --min-frames (default 4) are Sequence:no — filters out
+Bursts shorter than --min-frames (default 4) are Sequence:no — filters out
 accidental 2–3 frame taps in continuous mode.
 
 Example:
@@ -27,6 +32,8 @@ from pathlib import Path
 PHOTO_EXTS = {".jpg", ".jpeg", ".tif", ".tiff", ".arw", ".cr2", ".cr3", ".nef", ".dng", ".heic"}
 SEQ_KEYS = ("Sequence", "SequenceID", "SequencePos")
 CONTINUOUS_RE = re.compile(r"(continuous|\bhi\+?\b)", re.I)
+# Tail of rename_media_unique stem: YYYYMMDD-HHMMSS_DSC7659 → 7659
+CAMERA_NUM_RE = re.compile(r"(\d+)$")
 
 
 @dataclass
@@ -71,6 +78,31 @@ def parse_exif_dt(raw: str | None) -> datetime | None:
 
 def is_continuous_mode(release_mode: str) -> bool:
     return bool(CONTINUOUS_RE.search(release_mode or ""))
+
+
+def parse_sequence_number(raw: str | None) -> int | None:
+    """Parse maker-note SequenceNumber; ignore non-numeric placeholders."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or not text.isdigit():
+        return None
+    return int(text)
+
+
+def camera_number(path: Path) -> int:
+    """Original camera file number from basename (e.g. …_DSC7659 → 7659)."""
+    stem = path.stem
+    tail = stem.rsplit("_", 1)[-1] if "_" in stem else stem
+    match = CAMERA_NUM_RE.search(tail)
+    if match:
+        return int(match.group(1))
+    match = CAMERA_NUM_RE.search(stem)
+    return int(match.group(1)) if match else -1
+
+
+def frame_sort_key(frame: Frame) -> tuple:
+    return (frame.captured, camera_number(frame.path), frame.path.name)
 
 
 def parse_keyword_map(keywords) -> dict[str, str]:
@@ -158,14 +190,22 @@ def collect_frames(root: Path, recursive: bool, exiftool: str) -> list[Frame]:
 
 
 def cluster_frames(frames: list[Frame], gap_seconds: float) -> list[list[Frame]]:
+    """Group bursts: SequenceNumber reset when available, else capture-time gap."""
     if not frames:
         return []
-    ordered = sorted(frames, key=lambda f: (f.captured, f.path.name))
+    ordered = sorted(frames, key=frame_sort_key)
     clusters: list[list[Frame]] = [[ordered[0]]]
     for frame in ordered[1:]:
         prev = clusters[-1][-1]
-        delta = (frame.captured - prev.captured).total_seconds()
-        if delta > gap_seconds:
+        curr_sn = parse_sequence_number(frame.sequence_number)
+        prev_sn = parse_sequence_number(prev.sequence_number)
+        if curr_sn is not None and prev_sn is not None:
+            # New burst when counter returns to 1 or otherwise drops.
+            new_burst = curr_sn == 1 or curr_sn < prev_sn
+        else:
+            delta = (frame.captured - prev.captured).total_seconds()
+            new_burst = delta > gap_seconds
+        if new_burst:
             clusters.append([frame])
         else:
             clusters[-1].append(frame)
@@ -173,12 +213,14 @@ def cluster_frames(frames: list[Frame], gap_seconds: float) -> list[list[Frame]]
 
 
 def assign_clusters(clusters: list[list[Frame]], min_frames: int = 4) -> list[Assignment]:
-    """Mark clusters with >= min_frames as Sequence:yes; shorter ones as no."""
+    """Mark bursts with >= min_frames as Sequence:yes; shorter ones as no."""
     out: list[Assignment] = []
     for cluster in clusters:
-        n = len(cluster)
+        # Filename camera number is authoritative within a burst.
+        ordered = sorted(cluster, key=lambda f: (camera_number(f.path), f.path.name))
+        n = len(ordered)
         if n < min_frames:
-            for frame in cluster:
+            for frame in ordered:
                 out.append(
                     Assignment(
                         frame=frame,
@@ -189,8 +231,8 @@ def assign_clusters(clusters: list[list[Frame]], min_frames: int = 4) -> list[As
                     )
                 )
             continue
-        seq_id = cluster[0].captured.strftime("%Y%m%d-%H%M%S")
-        for i, frame in enumerate(cluster, start=1):
+        seq_id = ordered[0].captured.strftime("%Y%m%d-%H%M%S")
+        for i, frame in enumerate(ordered, start=1):
             out.append(
                 Assignment(
                     frame=frame,
@@ -287,14 +329,14 @@ def print_summary(
     print()
     print("=== Sequence tagging summary ===")
     print(f"Mode:           {'WRITE' if write else 'DRY-RUN'}" + (" (force)" if force and write else ""))
-    print(f"Gap threshold:  {gap:g} s")
+    print(f"Boundaries:     SequenceNumber reset (gap {gap:g}s fallback if absent)")
     print(f"Min frames:     {min_frames}")
     print(f"Files scanned:  {total_files}")
     print(f"Skipped (mode): {skipped_mode}  (not Continuous/Hi/Hi+)")
     print(f"Eligible:       {len(assignments)}")
-    print(f"Sequences:      {len(seq_ids)}  (clusters with {min_frames}+ frames)")
+    print(f"Sequences:      {len(seq_ids)}  (bursts with {min_frames}+ frames)")
     print(f"In sequences:   {len(multi)} frames")
-    print(f"Short clusters: {len(short)} frames  (2–{min_frames - 1} → Sequence:no)")
+    print(f"Short bursts:   {len(short)} frames  (2–{min_frames - 1} → Sequence:no)")
     print(f"Singles:        {len(singles)}  (eligible Continuous but alone → Sequence:no)")
     if sizes:
         vals = sorted(sizes.values())
@@ -309,9 +351,16 @@ def print_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Tag hi/hi+/Continuous photo sequences by capture-time gap.")
-    parser.add_argument("directory", type=Path, help="Folder of photos")
-    parser.add_argument("--gap", type=float, default=1.0, help="Max seconds between frames in a sequence (default 1.0)")
+    parser = argparse.ArgumentParser(
+        description="Tag Continuous/Hi/Hi+ bursts using SequenceNumber (gap fallback)."
+    )
+    parser.add_argument("directory", type=Path, help="Ingest folder of photos")
+    parser.add_argument(
+        "--gap",
+        type=float,
+        default=1.0,
+        help="Max seconds between frames when SequenceNumber is absent (default 1.0)",
+    )
     parser.add_argument(
         "--min-frames",
         type=int,
@@ -356,8 +405,10 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if is_seq or shown < 5:
             mark = "yes" if is_seq else "no "
+            sn = a.frame.sequence_number or "-"
             print(
-                f"{mark}  {a.sequence_pos or '-':>8}  {a.sequence_id or '-':16}  {a.frame.path.name}"
+                f"{mark}  {a.sequence_pos or '-':>8}  {a.sequence_id or '-':16}  "
+                f"camSeq={sn:>4}  {a.frame.path.name}"
             )
             shown += 1
             if shown >= 40:

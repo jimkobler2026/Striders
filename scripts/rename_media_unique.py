@@ -2,14 +2,14 @@
 """Prefix capture datetime onto camera filenames so catalog basenames stay unique.
 
 Camera names like _DSC0320.JPG recycle after card format. Excel Append matches by
-filename, so rename dump folders before Preview cull / catalog entry.
+filename, so rename ingest folders before Preview cull / catalog entry.
 
 Allowed root: ~/Pictures/environmental caustics
 New shape: YYYYMMDD-HHMMSS_ORIGINALSTEM.ext
 
 Dry-run by default:
-  python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/dump"
-  python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/dump" --write
+  python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/my-shoot"
+  python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/my-shoot" --write
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def main() -> int:
     parser.add_argument(
         "--recursive",
         action="store_true",
-        help="Include nested subfolders (e.g. DCIM-style dumps)",
+        help="Include nested subfolders (e.g. DCIM-style ingest folders)",
     )
     args = parser.parse_args()
 
