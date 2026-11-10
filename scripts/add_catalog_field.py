@@ -24,7 +24,7 @@ import xlwings as xw
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_CATALOG = ROOT / "scripts" / "build_catalog.py"
-BLANK_XLSM = ROOT / "catalog" / "Strider_Media_Catalog_blank.xlsm"
+BLANK_XLSM = ROOT / "catalog" / "build" / "Strider_Media_Catalog_blank.xlsm"
 
 FONT = "Times New Roman"
 SIZE = 14
@@ -40,7 +40,8 @@ def find_books() -> list:
                 name = str(b.fullname)
             except Exception:
                 continue
-            if "Strider_Media_Catalog" in name and "/build/" not in name:
+            # Prefer .xlsm catalogs; skip build .xlsx skeletons only.
+            if "Strider_Media_Catalog" in name and not name.lower().endswith(".xlsx"):
                 books.append(b)
     return books
 
@@ -49,8 +50,8 @@ def find_working_book():
     books = find_books()
     if not books:
         raise SystemExit(
-            "Open catalog/Strider_Media_Catalog.xlsm in Excel first "
-            "(xlwings needs the workbook open)."
+            "Open a Strider .xlsm in Excel first "
+            "(e.g. catalog/main catalog/Strider_Media_Catalog.xlsm; xlwings needs it open)."
         )
     # Prefer non-blank working copy
     for b in books:
@@ -367,7 +368,7 @@ def sync_blank(
 
     if not BLANK_XLSM.exists():
         print(f"Warning: blank template not found at {BLANK_XLSM}")
-        print("  Open catalog/Strider_Media_Catalog_blank.xlsm later and re-run, or copy layout by hand.")
+        print("  Open catalog/build/Strider_Media_Catalog_blank.xlsm later and re-run, or copy layout by hand.")
         return
 
     print(f"Opening blank template to sync: {BLANK_XLSM}")
@@ -380,7 +381,7 @@ def sync_blank(
         print("  Blank template saved.")
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not sync blank template automatically: {exc}")
-        print("  Open catalog/Strider_Media_Catalog_blank.xlsm and re-run this command, or copy layout.")
+        print("  Open catalog/build/Strider_Media_Catalog_blank.xlsm and re-run this command, or copy layout.")
     finally:
         app.quit()
 

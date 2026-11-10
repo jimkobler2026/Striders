@@ -20,7 +20,7 @@ def find_book():
                 name = str(b.fullname)
             except Exception:
                 continue
-            if "Strider_Media_Catalog" in name and "/build/" not in name:
+            if "Strider_Media_Catalog" in name and not name.lower().endswith(".xlsx"):
                 return b
     raise SystemExit("Open catalog/Strider_Media_Catalog.xlsm (or blank) in Excel first.")
 

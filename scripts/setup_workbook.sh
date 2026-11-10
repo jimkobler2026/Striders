@@ -37,7 +37,7 @@ if [[ -e "$XLSM" && "$FORCE" -ne 1 ]]; then
   echo >&2
   echo "That file holds your macros and catalog data." >&2
   echo "For helpers only:  ./scripts/install_mac_helpers.sh" >&2
-  echo "For a blank copy:  catalog/Strider_Media_Catalog_blank.xlsm" >&2
+  echo "For a blank copy:  catalog/build/Strider_Media_Catalog_blank.xlsm" >&2
   echo "To rebuild anyway: ./scripts/setup_workbook.sh --force" >&2
   exit 1
 fi

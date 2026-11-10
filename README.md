@@ -118,10 +118,11 @@ Prerequisites: helpers installed (`./scripts/install_mac_helpers.sh`), Excel res
 ### Which Excel file to use
 
 
-| File                                                                                   | Role                                                                                                        |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `[catalog/Strider_Media_Catalog_blank.xlsm](catalog/Strider_Media_Catalog_blank.xlsm)` | **Template of record** — empty starter with layout + macros. **Duplicate this** to start a working catalog. |
-| `catalog/build/Strider_Media_Catalog_blank.xlsm`                                       | Mirror of the blank (keep in sync when the blank changes).                                                  |
+| File / folder                                                                              | Role                                                                                                        |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `[catalog/build/Strider_Media_Catalog_blank.xlsm](catalog/build/Strider_Media_Catalog_blank.xlsm)` | **Template of record** — empty starter with layout + macros. **Duplicate this** to start a working catalog. |
+| `catalog/main catalog/Strider_Media_Catalog.xlsm`                                          | Working catalog — day-to-day use (tracked).                                                                 |
+| `catalog/backup of blank catalog/`                                                         | Optional local snapshots of the blank (gitignored).                                                         |
 
 
 Always open a `.xlsm`. Do not use a build `.xlsx` skeleton for daily work (no macros). Prefer duplicating the blank over running `setup_workbook.sh` (that script can overwrite a working catalog).
@@ -345,8 +346,9 @@ API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `Strider
 
 | Path                                                 | What it is                                                                              |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `catalog/Strider_Media_Catalog_blank.xlsm`           | Canonical empty catalog template                                                        |
-| `catalog/build/Strider_Media_Catalog_blank.xlsm`     | Mirror of blank                                                                         |
+| `catalog/build/Strider_Media_Catalog_blank.xlsm`     | Canonical empty catalog template (template of record)                                   |
+| `catalog/main catalog/Strider_Media_Catalog.xlsm`    | Working catalog (tracked)                                                               |
+| `catalog/backup of blank catalog/`                   | Optional blank snapshots (gitignored)                                                   |
 | `catalog/macros/CatalogMacros.bas`                   | VBA source of record                                                                    |
 | `catalog/macros/*.applescript`                       | Helper sources                                                                          |
 | `catalog/macros/EntrySheet_SelectionChange.txt`      | Entry sheet event stub                                                                  |
@@ -384,7 +386,7 @@ API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `Strider
 
 ## First-time setup
 
-1. Duplicate `catalog/Strider_Media_Catalog_blank.xlsm` → your working `.xlsm`.
+1. Duplicate `catalog/build/Strider_Media_Catalog_blank.xlsm` → e.g. `catalog/main catalog/Strider_Media_Catalog.xlsm`.
 2. Install helpers and restart Excel:
   ```bash
    chmod +x scripts/*.sh
@@ -404,5 +406,5 @@ Prefer **Ctrl+Shift+K** inside Excel (updates Lists, Entry, VideoEntry, Photos, 
 
 - Do **not** casually run `setup_workbook.sh` — it can overwrite a working `.xlsm` (requires `--force`).
 - Deleting Photos/Videos **rows** only removes catalog entries, not files on disk. Captions rows are not auto-deleted with them.
-- Keep the blank template updated when Entry layout or macros change, then mirror into `catalog/build/` if desired.
+- Keep `catalog/build/Strider_Media_Catalog_blank.xlsm` updated when Entry layout or macros change.
 

@@ -13,12 +13,13 @@
 
 | File | Role |
 |---|---|
-| `catalog/Strider_Media_Catalog_blank.xlsm` | **Template of record** — duplicate this for a working catalog |
-| `catalog/build/Strider_Media_Catalog_blank.xlsm` | Mirror of the blank |
+| `catalog/build/Strider_Media_Catalog_blank.xlsm` | **Template of record** — duplicate this for a working catalog |
+| `catalog/main catalog/Strider_Media_Catalog.xlsm` | Working catalog (tracked) |
+| `catalog/backup of blank catalog/` | Optional blank snapshots (gitignored) |
 | `catalog/macros/CatalogMacros.bas` | VBA source of record |
 | `catalog/macros/*.applescript` | Excel helper sources |
 
-There is **no** checked-in working `Strider_Media_Catalog.xlsm` anymore (removed). Users duplicate the blank. Do **not** run `setup_workbook.sh` casually.
+Working catalog: `catalog/main catalog/Strider_Media_Catalog.xlsm`. Blank backups under `catalog/backup of blank catalog/` stay local/gitignored. Duplicate the blank for new books; do **not** run `setup_workbook.sh` casually.
 
 ### Already shipped on `main` (`e2de3f4` and earlier)
 

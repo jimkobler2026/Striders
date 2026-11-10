@@ -164,8 +164,9 @@ def read_catalog_row(photo: Path, workbook: Path | None = None) -> dict[str, str
         candidates.append(workbook.expanduser())
     candidates.extend(
         [
+            ROOT / "catalog" / "main catalog" / "Strider_Media_Catalog.xlsm",
             ROOT / "catalog" / "Strider_Media_Catalog.xlsm",
-            ROOT / "catalog" / "Strider_Media_Catalog_blank.xlsm",
+            ROOT / "catalog" / "build" / "Strider_Media_Catalog_blank.xlsm",
         ]
     )
     try:

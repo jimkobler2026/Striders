@@ -9,3 +9,6 @@ venv/
 .env.*
 *.log
 tmp/
+
+# Local blank snapshots (template of record is catalog/build/; main catalog is tracked)
+catalog/backup of blank catalog/
