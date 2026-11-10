@@ -258,7 +258,7 @@ Install / refresh:
 
 Then restart Excel.
 
-**Tag write-back behavior (on Append):** Rating → EXIF/XMP Rating; notes/Note → Description/Caption (empty clears); Locale → Location + Keywords; every other non-empty tag key → Keywords/Subject as `Key:value`. Blank Sequence* on the form preserves Sequence* already on the file.
+**Tag write-back behavior (on Append):** Uses exiftool **MWG** composites so overlapping namespaces stay in sync — Rating → `MWG:Rating` (XMP); notes → `MWG:Description` (EXIF/IPTC/XMP); Locale → `MWG:Location` (+ Keywords); other tags → `MWG:Keywords` (`Key:value`, IPTC+XMP). Blank Sequence* on the form preserves Sequence* already on the file.
 
 ---
 

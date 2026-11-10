@@ -232,20 +232,25 @@ def merge_keywords(existing_keywords, assignment: Assignment) -> list[str]:
 
 def write_assignment(exiftool: str, assignment: Assignment, existing_keywords) -> None:
     kws = merge_keywords(existing_keywords, assignment)
-    # Clear then set so removals of SequenceID/Pos for singles stick
+    # MWG:Keywords syncs IPTC:Keywords + XMP-dc:Subject. Full-list replace
+    # (not clear+=) — MWG ignores Keywords= when += appears in the same command.
     cmd = [
         exiftool,
         "-m",
         "-overwrite_original",
         "-api",
         "LargeFileSupport=1",
-        "-Keywords=",
-        "-Subject=",
+        "-use",
+        "MWG",
+        "-charset",
+        "iptc=UTF8",
+        "-IPTC:CodedCharacterSet=UTF8",
+        "-sep",
+        "||",
+        f"-MWG:Keywords={'||'.join(kws)}",
+        "--",
+        str(assignment.frame.path),
     ]
-    for kw in kws:
-        cmd.append(f"-Keywords+={kw}")
-        cmd.append(f"-Subject+={kw}")
-    cmd.extend(["--", str(assignment.frame.path)])
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
         raise RuntimeError(proc.stderr or proc.stdout or "exiftool write failed")

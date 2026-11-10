@@ -299,7 +299,7 @@ def add_tag_write_preview(ws, field_rows: dict[str, int], start_row: int = 32):
     r += 1
 
     preview_rows = [
-        ("Rating → Rating / XMP:Rating", f'=IF({bref("Rating")}="","(none)",{bref("Rating")})'),
+        ("Rating → MWG:Rating", f'=IF({bref("Rating")}="","(none)",{bref("Rating")})'),
         ("Keyword Species:", f'=IF({bref("Species")}="","(none)","Species:"&{bref("Species")})'),
         ("Keyword Behavior:", f'=IF({bref("Behavior")}="","(none)","Behavior:"&{bref("Behavior")})'),
         ("Keyword Locale:", f'=IF({bref("Locale")}="","(none)","Locale:"&{bref("Locale")})'),
@@ -423,9 +423,8 @@ def add_readme_sheet(wb: Workbook):
         "Load fills them; Append preserves them. SequencePos is text (e.g. 6/54), not a fraction.",
         "",
         "Tag write-back on Append",
-        "Rating → Rating/XMP:Rating; notes → Description/Caption; Locale → Location;",
-        "Species, Behavior, Locale, SendToUK, View, Lighting, CausticAim, CausticAppearance,",
-        "Filters, Sequence* → Keywords / Subject (Species:…, CausticAim:…, etc.).",
+        "Uses exiftool MWG composites: Rating → MWG:Rating; notes → MWG:Description;",
+        "Locale → MWG:Location; Species/Behavior/…/Sequence* → MWG:Keywords (IPTC+XMP).",
         "",
         "Photos columns",
         ", ".join(PHOTO_HEADERS),

@@ -166,8 +166,8 @@ end trashFrontPreview
 -- payload: path <tab> key=value|key=value|...
 -- Labeled fields are order-independent. New catalog tags need no AppleScript edits:
 -- every non-empty key except Rating/notes becomes Keywords "Key:value".
--- Specials: Rating → Rating tags; notes → Description/Caption (empty clears);
--- Locale → Keywords + Location; blank Sequence* preserves file Sequence* keywords.
+-- Specials: Rating → MWG:Rating; notes → MWG:Description (empty clears);
+-- Locale → Keywords + MWG:Location; blank Sequence* preserves file Sequence* keywords.
 on writeCatalogTags(payload)
     if payload is "" then return "ERROR" & tab & "No tag payload."
     set AppleScript's text item delimiters to tab
@@ -242,27 +242,26 @@ on writeTagsToFile(posixPath, tagBlob)
         if sequencePos is not "" then set end of kwList to "SequencePos:" & sequencePos
     end if
 
-    set AppleScript's text item delimiters to ", "
+    -- Use || as list sep so commas inside tag values stay intact
+    set AppleScript's text item delimiters to "||"
     set kwJoined to kwList as text
     set AppleScript's text item delimiters to ""
 
-    -- Build exiftool args; overwrite in place (no _original backup clutter)
+    -- MWG composites sync overlapping EXIF/IPTC/XMP in one write.
+    -- CodedCharacterSet creates an IPTC block when missing so Keywords land in IPTC too.
     set cmd to quoted form of exif & " -m -overwrite_original -api LargeFileSupport=1"
+    set cmd to cmd & " -use MWG -charset iptc=UTF8 -IPTC:CodedCharacterSet=UTF8"
 
     if rating is not "" then
-        set cmd to cmd & " -Rating=" & quoted form of rating & " -XMP:Rating=" & quoted form of rating
+        set cmd to cmd & " -MWG:Rating=" & quoted form of rating
     end if
-    -- Always set description/caption from notes (empty clears stale SequencePos leaks like "2/5")
-    set cmd to cmd & " -XMP-dc:Description=" & quoted form of notes
-    set cmd to cmd & " -EXIF:ImageDescription=" & quoted form of notes
-    set cmd to cmd & " -IPTC:Caption-Abstract=" & quoted form of notes
+    -- Always set description from notes (empty clears stale SequencePos leaks like "2/5")
+    set cmd to cmd & " -MWG:Description=" & quoted form of notes
     if locale is not "" then
-        set cmd to cmd & " -XMP-iptcCore:Location=" & quoted form of locale
-        set cmd to cmd & " -IPTC:Sub-location=" & quoted form of locale
+        set cmd to cmd & " -MWG:Location=" & quoted form of locale
     end if
     -- Replace Keywords/Subject with the catalog set (clears prior swapped junk)
-    set cmd to cmd & " -sep \", \" -Keywords=" & quoted form of kwJoined
-    set cmd to cmd & " -XMP-dc:Subject=" & quoted form of kwJoined
+    set cmd to cmd & " -sep \"||\" -MWG:Keywords=" & quoted form of kwJoined
 
     set cmd to cmd & " " & quoted form of posixPath
 
