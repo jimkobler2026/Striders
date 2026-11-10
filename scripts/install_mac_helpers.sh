@@ -39,12 +39,30 @@ exec "\$PY" "\${ARGS[@]}"
 EOF
 chmod +x "$DEST/StriderCaption.sh"
 
+# Shell bridge: list SequenceID members for bulk AppendPhotoSequence.
+cat > "$DEST/StriderSequence.sh" <<EOF
+#!/bin/zsh
+set -euo pipefail
+ROOT="$ROOT"
+PY="$PY"
+ANCHOR="\${1:-}"
+SEQID="\${2:-}"
+if [[ -z "\$ANCHOR" || -z "\$SEQID" ]]; then
+  echo "ERROR\tUsage: StriderSequence.sh <file-or-folder> <SequenceID>" >&2
+  exit 2
+fi
+cd "\$ROOT"
+exec "\$PY" scripts/list_sequence_members.py "\$ANCHOR" --id "\$SEQID" --machine
+EOF
+chmod +x "$DEST/StriderSequence.sh"
+
 echo "Installed:"
 echo "  $DEST/StriderOpenPreview.scpt"
 echo "  $DEST/StriderRevealFinder.scpt"
 echo "  $DEST/StriderFinderMeta.scpt"
 echo "  $DEST/StriderCaption.scpt"
 echo "  $DEST/StriderCaption.sh"
+echo "  $DEST/StriderSequence.sh"
 echo
 echo "Restart Microsoft Excel if it was open, then open the .xlsm catalog."
 echo "Captions default to Gemini Flash (google). Optional: anthropic / openai."

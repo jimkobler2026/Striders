@@ -31,6 +31,63 @@ on readPath(posixPath)
     return my metadataLine(posixPath)
 end readPath
 
+-- payload: fileOrFolderPath <tab> SequenceID
+-- Returns OK <tab> path1 <tab> pos1 <tab> path2 <tab> pos2 …
+-- (via StriderSequence.sh → list_sequence_members.py)
+on listSequenceMembers(payload)
+    if payload is "" then return "ERROR" & tab & "No sequence payload."
+    set AppleScript's text item delimiters to tab
+    set parts to text items of payload
+    set AppleScript's text item delimiters to ""
+    if (count of parts) < 2 then return "ERROR" & tab & "Need path and SequenceID."
+
+    set anchor to item 1 of parts
+    set seqID to item 2 of parts
+    if anchor is "" or seqID is "" then return "ERROR" & tab & "Need path and SequenceID."
+
+    set sh to (POSIX path of (path to home folder)) & "Library/Application Scripts/com.microsoft.Excel/StriderSequence.sh"
+    try
+        do shell script "test -x " & quoted form of sh
+    on error
+        return "ERROR" & tab & "StriderSequence.sh missing. Run scripts/install_mac_helpers.sh, then restart Excel."
+    end try
+
+    try
+        set raw to do shell script quoted form of sh & " " & quoted form of anchor & " " & quoted form of seqID
+    on error errMsg
+        return "ERROR" & tab & errMsg
+    end try
+
+    set AppleScript's text item delimiters to {return, linefeed}
+    set lines to text items of raw
+    set AppleScript's text item delimiters to ""
+    if (count of lines) < 1 then return "ERROR" & tab & "Empty sequence list response."
+    set head to item 1 of lines
+    if head starts with "ERROR" then return head
+    if head is not "OK" then return "ERROR" & tab & "Unexpected sequence list header: " & head
+
+    set out to "OK"
+    repeat with i from 2 to count of lines
+        set ln to item i of lines
+        if ln is "" then
+            -- skip
+        else
+            set AppleScript's text item delimiters to tab
+            set bits to text items of ln
+            set AppleScript's text item delimiters to ""
+            if (count of bits) >= 1 then
+                set out to out & tab & (item 1 of bits)
+                if (count of bits) >= 2 then
+                    set out to out & tab & (item 2 of bits)
+                else
+                    set out to out & tab & ""
+                end if
+            end if
+        end if
+    end repeat
+    return out
+end listSequenceMembers
+
 on frontPreviewPOSIXPath(dummy)
     -- Callers (AppleScriptTask and internal) must pass one arg; use "".
     -- Prefer "tell … to set …" so Preview tell-scoping cannot swallow locals.
@@ -107,9 +164,10 @@ on trashFrontPreview(payload)
 end trashFrontPreview
 
 -- payload: path <tab> key=value|key=value|...
--- Keys: Rating, Species, Behavior, Locale, SendToUK, View, Lighting,
---        CausticAim, CausticAppearance, Filters, notes, Sequence, SequenceID, SequencePos
--- Labeled fields are order-independent (avoids slot-shift bugs when columns are added).
+-- Labeled fields are order-independent. New catalog tags need no AppleScript edits:
+-- every non-empty key except Rating/notes becomes Keywords "Key:value".
+-- Specials: Rating → Rating tags; notes → Description/Caption (empty clears);
+-- Locale → Keywords + Location; blank Sequence* preserves file Sequence* keywords.
 on writeCatalogTags(payload)
     if payload is "" then return "ERROR" & tab & "No tag payload."
     set AppleScript's text item delimiters to tab
@@ -133,41 +191,56 @@ on writeTagsToFile(posixPath, tagBlob)
     end try
 
     set rating to my fieldValue(tagBlob, "Rating")
-    set species to my fieldValue(tagBlob, "Species")
-    set behavior to my fieldValue(tagBlob, "Behavior")
-    set locale to my fieldValue(tagBlob, "Locale")
-    set sendUK to my fieldValue(tagBlob, "SendToUK")
-    set viewTag to my fieldValue(tagBlob, "View")
-    set lighting to my fieldValue(tagBlob, "Lighting")
-    set causticAim to my fieldValue(tagBlob, "CausticAim")
-    set causticAppearance to my fieldValue(tagBlob, "CausticAppearance")
-    set filters to my fieldValue(tagBlob, "Filters")
     set notes to my fieldValue(tagBlob, "notes")
+    set locale to my fieldValue(tagBlob, "Locale")
     set sequence to my fieldValue(tagBlob, "Sequence")
     set sequenceID to my fieldValue(tagBlob, "SequenceID")
     set sequencePos to my fieldValue(tagBlob, "SequencePos")
 
     -- If Entry left Sequence* blank, keep any existing Sequence* keywords on the file
+    set preservedSeq to false
     if sequence is "" and sequenceID is "" and sequencePos is "" then
         set existingSeq to my readSequenceFields(posixPath)
         set sequence to item 1 of existingSeq
         set sequenceID to item 2 of existingSeq
         set sequencePos to item 3 of existingSeq
+        set preservedSeq to true
     end if
 
     set kwList to {}
-    if species is not "" then set end of kwList to "Species:" & species
-    if behavior is not "" then set end of kwList to "Behavior:" & behavior
-    if locale is not "" then set end of kwList to "Locale:" & locale
-    if sendUK is not "" then set end of kwList to "SendToUK:" & sendUK
-    if viewTag is not "" then set end of kwList to "View:" & viewTag
-    if lighting is not "" then set end of kwList to "Lighting:" & lighting
-    if causticAim is not "" then set end of kwList to "CausticAim:" & causticAim
-    if causticAppearance is not "" then set end of kwList to "CausticAppearance:" & causticAppearance
-    if filters is not "" then set end of kwList to "Filters:" & filters
-    if sequence is not "" then set end of kwList to "Sequence:" & sequence
-    if sequenceID is not "" then set end of kwList to "SequenceID:" & sequenceID
-    if sequencePos is not "" then set end of kwList to "SequencePos:" & sequencePos
+    set AppleScript's text item delimiters to "|"
+    set bits to text items of tagBlob
+    set AppleScript's text item delimiters to ""
+    repeat with bit in bits
+        set t to my trimText(bit as text)
+        if t is "" then
+            -- skip
+        else
+            set eq to offset of "=" in t
+            if eq > 1 then
+                set k to text 1 thru (eq - 1) of t
+                if eq = (length of t) then
+                    set v to ""
+                else
+                    set v to text (eq + 1) thru -1 of t
+                end if
+                -- Rating/notes are not Keywords; Sequence* may be injected from file below
+                if k is "Rating" or k is "notes" then
+                    -- skip
+                else if k is "Sequence" or k is "SequenceID" or k is "SequencePos" then
+                    if v is not "" then set end of kwList to k & ":" & v
+                else if v is not "" then
+                    set end of kwList to k & ":" & v
+                end if
+            end if
+        end if
+    end repeat
+
+    if preservedSeq then
+        if sequence is not "" then set end of kwList to "Sequence:" & sequence
+        if sequenceID is not "" then set end of kwList to "SequenceID:" & sequenceID
+        if sequencePos is not "" then set end of kwList to "SequencePos:" & sequencePos
+    end if
 
     set AppleScript's text item delimiters to ", "
     set kwJoined to kwList as text

@@ -14,6 +14,8 @@ Option Explicit
 '   Control+Shift+O  OpenSelectedInPreview
 '   Control+Shift+J  RevealSelectedInFinder
 '   Control+Shift+D  TrashFrontPreviewDocument  (confirm, then Trash)
+'   Control+Shift+K  AddCatalogField            (new click-pick tag)
+'   Control+Shift+S  AppendPhotoSequence        (all frames of Entry SequenceID)
 ' Re-import this module, then run AssignMacroShortcuts (or reopen the workbook).
 ' If click-to-pick stops working, run FixEnableEvents, then re-paste Entry/VideoEntry SelectionChange.
 
@@ -21,10 +23,12 @@ Private Const ENTRY_SHEET As String = "Entry"
 Private Const VIDEO_ENTRY_SHEET As String = "VideoEntry"
 Private Const PHOTOS_SHEET As String = "Photos"
 Private Const VIDEOS_SHEET As String = "Videos"
+Private Const LISTS_SHEET As String = "Lists"
 Private Const CAPTIONS_SHEET As String = "Captions"
 Private Const HEADER_ROW As Long = 1
 ' Captions sheet: row1 title, row2 prompt, row3 hint, row4 headers, row5+ data
 Private Const CAPTIONS_HEADER_ROW As Long = 4
+Private Const LISTS_HEADER_ROW As Long = 2
 Private Const ENTRY_FIRST_FIELD_ROW As Long = 9
 Private Const ENTRY_OPTION_FIRST_COL As Long = 3
 ' Default caption provider: google = Gemini Flash (cheap + good enough). Use "anthropic" for Claude.
@@ -63,6 +67,8 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+j"
     Application.OnKey "^+d"
     Application.OnKey "^+y"
+    Application.OnKey "^+k"
+    Application.OnKey "^+s"
 
     Application.OnKey "^+q", "LoadFromFinderSelection"
     Application.OnKey "^+i", "LoadFromPreviewSelection"
@@ -74,6 +80,8 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+j", "RevealSelectedInFinder"
     Application.OnKey "^+d", "TrashFrontPreviewDocument"
     Application.OnKey "^+y", "CaptionSelectedPhotos"
+    Application.OnKey "^+k", "AddCatalogField"
+    Application.OnKey "^+s", "AppendPhotoSequence"
     On Error GoTo 0
 End Sub
 
@@ -94,7 +102,269 @@ Public Sub ClearMacroShortcuts()
     Application.OnKey "^+o"
     Application.OnKey "^+j"
     Application.OnKey "^+d"
+    Application.OnKey "^+k"
+    Application.OnKey "^+s"
     On Error GoTo 0
+End Sub
+
+' Add a click-pick tag: prompts for name + options; updates Lists, Entry, VideoEntry, Photos, Videos.
+' Existing catalog rows are left intact (new column empty).
+Public Sub AddCatalogField()
+    Dim fieldName As String
+    Dim optionsRaw As String
+    Dim afterRaw As String
+    Dim afterName As String
+    Dim opts() As String
+    Dim parts() As String
+    Dim i As Long
+    Dim nOpts As Long
+    Dim piece As String
+
+    fieldName = Trim$(CStr(Application.InputBox( _
+        Prompt:="New tag field name (e.g. Substrate):", _
+        Title:="Add Catalog Field", Type:=2)))
+    If fieldName = "False" Or Len(fieldName) = 0 Then Exit Sub
+
+    If FormRowFor(ENTRY_SHEET, fieldName) > 0 Then
+        MsgBox "Entry already has a field named """ & fieldName & """.", vbExclamation
+        Exit Sub
+    End If
+    If HeaderCol(Worksheets(PHOTOS_SHEET), fieldName) > 0 Then
+        MsgBox "Photos already has a column named """ & fieldName & """.", vbExclamation
+        Exit Sub
+    End If
+    If ListsHeaderCol(fieldName) > 0 Then
+        MsgBox "Lists already has a column named """ & fieldName & """.", vbExclamation
+        Exit Sub
+    End If
+
+    optionsRaw = Trim$(CStr(Application.InputBox( _
+        Prompt:="Click-pick options, separated by commas" & vbCrLf & _
+                "(e.g. mud, sand, rock, vegetation):", _
+        Title:="Add Catalog Field", Type:=2)))
+    If optionsRaw = "False" Or Len(optionsRaw) = 0 Then Exit Sub
+
+    parts = Split(optionsRaw, ",")
+    nOpts = 0
+    ReDim opts(0 To 0)
+    For i = LBound(parts) To UBound(parts)
+        piece = Trim$(parts(i))
+        If Len(piece) > 0 Then
+            ReDim Preserve opts(0 To nOpts)
+            opts(nOpts) = piece
+            nOpts = nOpts + 1
+        End If
+    Next i
+    If nOpts = 0 Then
+        MsgBox "Enter at least one option.", vbExclamation
+        Exit Sub
+    End If
+
+    afterRaw = Trim$(CStr(Application.InputBox( _
+        Prompt:="Insert after which existing field?" & vbCrLf & _
+                "(Leave blank to insert above notes)", _
+        Title:="Add Catalog Field", Default:="", Type:=2)))
+    If afterRaw = "False" Then Exit Sub
+    afterName = Trim$(afterRaw)
+
+    If Len(afterName) > 0 Then
+        If FormRowFor(ENTRY_SHEET, afterName) = 0 Then
+            MsgBox "Entry has no field named """ & afterName & """.", vbExclamation
+            Exit Sub
+        End If
+    End If
+
+    Application.ScreenUpdating = False
+    On Error GoTo failSoft
+
+    InsertListsColumn fieldName, opts
+    InsertEntryFieldRow ENTRY_SHEET, fieldName, opts, afterName
+    InsertMetadataPreviewRow ENTRY_SHEET, fieldName
+    On Error Resume Next
+    InsertEntryFieldRow VIDEO_ENTRY_SHEET, fieldName, opts, afterName
+    InsertMetadataPreviewRow VIDEO_ENTRY_SHEET, fieldName
+    On Error GoTo failSoft
+    InsertCatalogColumn PHOTOS_SHEET, fieldName, afterName
+    On Error Resume Next
+    InsertCatalogColumn VIDEOS_SHEET, fieldName, afterName
+    On Error GoTo failSoft
+
+    Application.ScreenUpdating = True
+    MsgBox "Added tag """ & fieldName & """ to Lists, Entry, VideoEntry, Photos, Videos," & vbCrLf & _
+           "and the ""Metadata written to file on Append"" preview." & vbCrLf & vbCrLf & _
+           "Save the workbook. Existing rows keep a blank value for the new column.", vbInformation
+    Exit Sub
+
+failSoft:
+    Application.ScreenUpdating = True
+    MsgBox "Could not finish adding the field: " & Err.Description, vbExclamation
+End Sub
+
+Private Function ListsHeaderCol(ByVal headerName As String) As Long
+    Dim ws As Worksheet
+    Dim c As Long
+    On Error Resume Next
+    Set ws = Worksheets(LISTS_SHEET)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        ListsHeaderCol = 0
+        Exit Function
+    End If
+    For c = 1 To 64
+        If StrComp(Trim$(CStr(ws.Cells(LISTS_HEADER_ROW, c).Value)), headerName, vbTextCompare) = 0 Then
+            ListsHeaderCol = c
+            Exit Function
+        End If
+        If Len(Trim$(CStr(ws.Cells(LISTS_HEADER_ROW, c).Value))) = 0 And c > 1 Then Exit For
+    Next c
+    ListsHeaderCol = 0
+End Function
+
+Private Sub InsertListsColumn(ByVal fieldName As String, opts As Variant)
+    Dim ws As Worksheet
+    Dim col As Long
+    Dim c As Long
+    Dim i As Long
+
+    Set ws = Worksheets(LISTS_SHEET)
+    col = 1
+    For c = 1 To 64
+        If Len(Trim$(CStr(ws.Cells(LISTS_HEADER_ROW, c).Value))) > 0 Then
+            col = c + 1
+        End If
+    Next c
+    ws.Cells(LISTS_HEADER_ROW, col).Value = fieldName
+    ws.Cells(LISTS_HEADER_ROW, col).Font.Bold = True
+    For i = LBound(opts) To UBound(opts)
+        ws.Cells(LISTS_HEADER_ROW + 1 + (i - LBound(opts)), col).Value = opts(i)
+    Next i
+End Sub
+
+Private Sub InsertEntryFieldRow(ByVal sheetName As String, ByVal fieldName As String, _
+                                opts As Variant, ByVal afterName As String)
+    Dim ws As Worksheet
+    Dim insertAt As Long
+    Dim notesRow As Long
+    Dim i As Long
+
+    Set ws = Worksheets(sheetName)
+    If FormRowFor(sheetName, fieldName) > 0 Then Exit Sub
+
+    If Len(afterName) > 0 Then
+        insertAt = FormRowFor(sheetName, afterName) + 1
+        If insertAt <= 1 Then Exit Sub
+    Else
+        notesRow = FormRowFor(sheetName, "notes")
+        If notesRow = 0 Then notesRow = FormRowFor(sheetName, "Note")
+        If notesRow > 0 Then
+            insertAt = notesRow
+        Else
+            insertAt = ENTRY_FIRST_FIELD_ROW
+        End If
+    End If
+
+    ws.Rows(insertAt).Insert Shift:=xlDown
+    ws.Cells(insertAt, 1).Value = fieldName
+    ws.Cells(insertAt, 1).Font.Bold = True
+    For i = LBound(opts) To UBound(opts)
+        ws.Cells(insertAt, ENTRY_OPTION_FIRST_COL + (i - LBound(opts))).Value = opts(i)
+    Next i
+End Sub
+
+' Add Keyword preview under "Metadata written to file on Append".
+Private Sub InsertMetadataPreviewRow(ByVal sheetName As String, ByVal fieldName As String)
+    Dim ws As Worksheet
+    Dim fieldRow As Long
+    Dim keyName As String
+    Dim label As String
+    Dim r As Long
+    Dim sectionStart As Long
+    Dim insertAt As Long
+
+    Set ws = Worksheets(sheetName)
+    fieldRow = FormRowFor(sheetName, fieldName)
+    If fieldRow = 0 Then Exit Sub
+
+    keyName = KeywordKeyForLabel(fieldName)
+    label = "Keyword " & keyName & ":"
+
+    ' Already present?
+    For r = 1 To 200
+        If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), label, vbTextCompare) = 0 Then Exit Sub
+    Next r
+
+    sectionStart = 0
+    For r = 1 To 200
+        If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Metadata written to file on Append", vbTextCompare) = 0 Then
+            sectionStart = r
+            Exit For
+        End If
+    Next r
+    If sectionStart = 0 Then Exit Sub
+
+    ' Insert before Location / Description, else after last Keyword row in the section.
+    insertAt = 0
+    For r = sectionStart + 1 To sectionStart + 40
+        If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Location → Locale", vbTextCompare) = 0 Or _
+           StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → notes", vbTextCompare) = 0 Or _
+           StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Description → Note", vbTextCompare) = 0 Then
+            insertAt = r
+            Exit For
+        End If
+        If Len(Trim$(CStr(ws.Cells(r, 1).Value))) = 0 Then Exit For
+    Next r
+    If insertAt = 0 Then
+        insertAt = sectionStart + 1
+        For r = sectionStart + 1 To sectionStart + 40
+            If Left$(Trim$(CStr(ws.Cells(r, 1).Value)), 8) = "Keyword " Then
+                insertAt = r + 1
+            ElseIf Len(Trim$(CStr(ws.Cells(r, 1).Value))) = 0 Then
+                Exit For
+            End If
+        Next r
+    End If
+
+    ws.Rows(insertAt).Insert Shift:=xlDown
+    ws.Cells(insertAt, 1).Value = label
+    ws.Cells(insertAt, 1).Font.Bold = True
+    ' Re-resolve field cell (supports A/B, C/D, E/F layouts).
+    Dim valueCol As Long
+    If Not FindFormField(sheetName, fieldName, fieldRow, valueCol) Then Exit Sub
+    ws.Cells(insertAt, 2).Formula = _
+        "=IF($" & ColLetter(valueCol) & "$" & fieldRow & "="""",""(none)"",""" & _
+        keyName & ":""&$" & ColLetter(valueCol) & "$" & fieldRow & ")"
+End Sub
+
+Private Sub InsertCatalogColumn(ByVal sheetName As String, ByVal fieldName As String, ByVal afterName As String)
+    Dim ws As Worksheet
+    Dim hdr As Long
+    Dim col As Long
+    Dim afterCol As Long
+    Dim notesCol As Long
+
+    Set ws = Worksheets(sheetName)
+    hdr = SheetHeaderRow(ws)
+    If HeaderCol(ws, fieldName) > 0 Then Exit Sub
+
+    If Len(afterName) > 0 Then
+        afterCol = HeaderCol(ws, afterName)
+        If afterCol > 0 Then
+            col = afterCol + 1
+        Else
+            col = HeaderLastCol(ws) + 1
+        End If
+    Else
+        notesCol = HeaderCol(ws, "notes")
+        If notesCol > 0 Then
+            col = notesCol
+        Else
+            col = HeaderLastCol(ws) + 1
+        End If
+    End If
+
+    ws.Columns(col).Insert Shift:=xlToRight
+    ws.Cells(hdr, col).Value = fieldName
+    ws.Cells(hdr, col).Font.Bold = True
 End Sub
 
 ' Click an option in columns C+, then run this macro (fills column B).
@@ -130,14 +400,31 @@ Private Function IsEntryFormSheet(ByVal sheetName As String) As Boolean
     If StrComp(sheetName, VIDEO_ENTRY_SHEET, vbTextCompare) = 0 Then IsEntryFormSheet = True
 End Function
 
+' Click-pick if Lists has a matching header (row 2) — new fields need no Case edit.
 Private Function IsClickPickField(ByVal label As String) As Boolean
-    Select Case label
-        Case "Rating", "Species", "Behavior", "Locale", "Send to UK", "View", "Lighting", _
-             "Caustic camera aim", "Caustic appearance", "Filters"
+    Dim ws As Worksheet
+    Dim c As Long
+    Dim lastCol As Long
+    Dim hdr As String
+
+    IsClickPickField = False
+    If Len(Trim$(label)) = 0 Then Exit Function
+    On Error Resume Next
+    Set ws = Worksheets(LISTS_SHEET)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Function
+
+    lastCol = 1
+    For c = 1 To 64
+        hdr = Trim$(CStr(ws.Cells(LISTS_HEADER_ROW, c).Value))
+        If Len(hdr) > 0 Then lastCol = c
+    Next c
+    For c = 1 To lastCol
+        If StrComp(Trim$(CStr(ws.Cells(LISTS_HEADER_ROW, c).Value)), label, vbTextCompare) = 0 Then
             IsClickPickField = True
-        Case Else
-            IsClickPickField = False
-    End Select
+            Exit Function
+        End If
+    Next c
 End Function
 
 Public Sub LoadFromFinderSelection()
@@ -321,6 +608,243 @@ Public Sub AppendPhotoRow()
     ClearFormFields ENTRY_SHEET, PhotoFieldList()
     ws.Activate
 End Sub
+
+' Bulk-append every frame sharing Entry's SequenceID.
+' Seed user tags from Entry (intended: load/tag the 1/n frame first).
+' Each frame keeps its own Path/Name/Date/Time/camera EXIF + SequencePos.
+Public Sub AppendPhotoSequence()
+    Dim ws As Worksheet
+    Dim path As String
+    Dim seqID As String
+    Dim seqPos As String
+    Dim seqFlag As String
+    Dim raw As String
+    Dim parts() As String
+    Dim i As Long
+    Dim memberPath As String
+    Dim memberPos As String
+    Dim seedLabels As Variant
+    Dim seedVals() As String
+    Dim nSeed As Long
+    Dim label As String
+    Dim countOk As Long
+    Dim destRow As Long
+    Dim fileName As String
+    Dim ans As VbMsgBoxResult
+
+    path = NormalizePath(Trim$(CStr(FormValue(ENTRY_SHEET, "Path"))))
+    seqID = Trim$(CStr(FormValue(ENTRY_SHEET, "SequenceID")))
+    seqPos = Trim$(CStr(FormValue(ENTRY_SHEET, "SequencePos")))
+    seqFlag = LCase$(Trim$(CStr(FormValue(ENTRY_SHEET, "Sequence"))))
+
+    If Len(path) = 0 Then
+        MsgBox "Load the sequence's first frame (1/n) into Entry first.", vbExclamation
+        Exit Sub
+    End If
+    If Len(seqID) = 0 Then
+        MsgBox "Entry has no SequenceID. Load a sequence-tagged photo first.", vbExclamation
+        Exit Sub
+    End If
+    If seqFlag <> "yes" Then
+        ans = MsgBox("Entry Sequence is not ""yes"". Continue anyway?", vbYesNo + vbQuestion)
+        If ans <> vbYes Then Exit Sub
+    End If
+    If Left$(seqPos, 2) <> "1/" And Len(seqPos) > 0 Then
+        ans = MsgBox( _
+            "Entry SequencePos is """ & seqPos & """ (expected 1/n)." & vbCrLf & _
+            "Tags on Entry will still be applied to every frame." & vbCrLf & vbCrLf & _
+            "Continue?", vbYesNo + vbQuestion)
+        If ans <> vbYes Then Exit Sub
+    End If
+
+    ' Snapshot seed tags (user + notes); exclude per-frame identity/camera/sequence.
+    seedLabels = PhotoFieldList()
+    nSeed = 0
+    ReDim seedVals(LBound(seedLabels) To UBound(seedLabels))
+    For i = LBound(seedLabels) To UBound(seedLabels)
+        label = CStr(seedLabels(i))
+        If IsSequenceSeedField(label) Then
+            seedVals(i) = CStr(FormValue(ENTRY_SHEET, label) & "")
+            nSeed = nSeed + 1
+        Else
+            seedVals(i) = Chr$(0) ' marker: not a seed field
+        End If
+    Next i
+
+#If Mac Then
+    On Error GoTo appleScriptMissing
+    raw = AppleScriptTask("StriderFinderMeta.scpt", "listSequenceMembers", path & vbTab & seqID)
+    On Error GoTo 0
+#Else
+    MsgBox "AppendPhotoSequence is implemented for Mac Excel.", vbInformation
+    Exit Sub
+#End If
+
+    parts = Split(raw, vbTab)
+    If UBound(parts) < 0 Then
+        MsgBox "Empty response listing sequence members.", vbExclamation
+        Exit Sub
+    End If
+    If parts(0) = "ERROR" Then
+        If UBound(parts) >= 1 Then
+            MsgBox parts(1), vbExclamation
+        Else
+            MsgBox "Could not list sequence members.", vbExclamation
+        End If
+        Exit Sub
+    End If
+    If UBound(parts) < 2 Then
+        MsgBox "No files found for SequenceID " & seqID & " in that folder." & vbCrLf & _
+               "Run tag_sequences.py --write on the dump first.", vbExclamation
+        Exit Sub
+    End If
+
+    EnsureColumns Worksheets(PHOTOS_SHEET), PhotoFieldList()
+    Set ws = Worksheets(PHOTOS_SHEET)
+    Application.ScreenUpdating = False
+    countOk = 0
+
+    ' parts: OK, path1, pos1, path2, pos2, ...
+    For i = 1 To UBound(parts) Step 2
+        If i + 1 > UBound(parts) Then Exit For
+        memberPath = NormalizePath(Trim$(parts(i)))
+        memberPos = Trim$(parts(i + 1))
+        If Len(memberPath) = 0 Then GoTo nextMember
+
+        If Not FillEntryAutoFromPath(memberPath) Then GoTo nextMember
+
+        ' Restore seed tags; Sequence* come from the file / member list below.
+        Dim j As Long
+        For j = LBound(seedLabels) To UBound(seedLabels)
+            label = CStr(seedLabels(j))
+            If seedVals(j) <> Chr$(0) Then
+                If StrComp(label, "Note", vbTextCompare) = 0 Or StrComp(label, "notes", vbTextCompare) = 0 Then
+                    SetEntryTextValue label, seedVals(j)
+                Else
+                    SetFormValue ENTRY_SHEET, label, seedVals(j)
+                End If
+            End If
+        Next j
+        ' Cluster id + this frame's position
+        SetEntryTextValue "Sequence", "yes"
+        SetEntryTextValue "SequenceID", seqID
+        If Len(memberPos) > 0 Then SetEntryTextValue "SequencePos", memberPos
+
+        fileName = Trim$(CStr(FormValue(ENTRY_SHEET, "Name")))
+        If Len(fileName) = 0 Then fileName = BaseName(memberPath)
+        destRow = FindRowByFileName(ws, fileName)
+        If destRow = 0 Then destRow = NextDataRow(ws)
+        CopyFormFieldsToRow ENTRY_SHEET, ws, destRow, PhotoFieldList()
+        FormatCatalogField ws, destRow, "Date", "m/d/yy"
+        FormatCatalogField ws, destRow, "Time", "[$-F400]h:mm:ss AM/PM"
+        AddNameHyperlink ws, destRow, memberPath, fileName
+        WriteCatalogTagsToFile ENTRY_SHEET, memberPath
+        countOk = countOk + 1
+nextMember:
+    Next i
+
+    ClearFormFields ENTRY_SHEET, PhotoFieldList()
+    Application.ScreenUpdating = True
+    ws.Activate
+    MsgBox "Appended " & countOk & " frame(s) for SequenceID " & seqID & "." & vbCrLf & _
+           "Shared tags came from Entry (1/n seed); each row kept its own SequencePos.", vbInformation
+    Exit Sub
+
+appleScriptMissing:
+    Application.ScreenUpdating = True
+    MsgBox "Could not run StriderFinderMeta.scpt (listSequenceMembers)." & vbCrLf & _
+           "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+End Sub
+
+' User tags applied to every frame; not camera/identity/sequence fields.
+Private Function IsSequenceSeedField(ByVal label As String) As Boolean
+    Select Case label
+        Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
+             "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Duration", "FrameRate", "Resolution", _
+             "Sequence", "SequenceID", "SequencePos"
+            IsSequenceSeedField = False
+        Case Else
+            IsSequenceSeedField = IsFormFieldLabel(label)
+    End Select
+End Function
+
+' Fill Entry auto/camera/sequence fields from a path (no MsgBox). False on failure.
+Private Function FillEntryAutoFromPath(ByVal posixPath As String) As Boolean
+    Dim raw As String
+    Dim parts() As String
+    Dim meta() As String
+    Dim path As String
+    Dim fileName As String
+    Dim ext As String
+    Dim dto As String
+    Dim createDate As String
+    Dim fileSize As String
+    Dim shutter As String
+    Dim aperture As String
+    Dim isoVal As String
+    Dim camera As String
+    Dim mode As String
+    Dim lens As String
+    Dim stamp As String
+
+    FillEntryAutoFromPath = False
+#If Mac Then
+    On Error GoTo failFill
+    raw = AppleScriptTask("StriderFinderMeta.scpt", "readPath", posixPath)
+    On Error GoTo 0
+#Else
+    Exit Function
+#End If
+
+    parts = Split(raw, vbTab)
+    If UBound(parts) < 2 Then Exit Function
+    If parts(0) = "ERROR" Then Exit Function
+
+    path = NormalizePath(parts(1))
+    If UBound(parts) >= 2 Then
+        meta = Split(parts(2), "|")
+    Else
+        ReDim meta(0 To 0)
+        meta(0) = ""
+    End If
+
+    fileName = MetaAt(meta, 0)
+    ext = MetaAt(meta, 1)
+    dto = MetaAt(meta, 3)
+    createDate = MetaAt(meta, 4)
+    fileSize = MetaAt(meta, 5)
+    shutter = MetaAt(meta, 6)
+    aperture = MetaAt(meta, 7)
+    isoVal = MetaAt(meta, 8)
+    camera = MetaAt(meta, 9)
+    mode = MetaAt(meta, 10)
+    lens = MetaAt(meta, 11)
+    If Len(fileName) = 0 Then fileName = BaseName(path)
+    stamp = FirstNonEmpty(dto, createDate)
+
+    SetEntryValue "Path", path
+    SetEntryValue "Name", fileName
+    SetEntryValue "Type", UCase$(ext)
+    SetEntryValue "FileSize", fileSize
+    SetEntryValue "Date", ExtractDate(stamp)
+    SetEntryValue "Time", ExtractTime(stamp)
+    FormatEntryField "Date", "m/d/yy"
+    FormatEntryField "Time", "[$-F400]h:mm:ss AM/PM"
+    SetEntryValue "Speed", shutter
+    SetEntryValue "f-stop", aperture
+    SetEntryValue "ISO", isoVal
+    SetEntryValue "Camera", camera
+    SetEntryValue "Mode", mode
+    SetEntryValue "Lens", lens
+    SetEntryTextValue "Sequence", MetaAt(meta, 12)
+    SetEntryTextValue "SequenceID", MetaAt(meta, 13)
+    SetEntryTextValue "SequencePos", MetaAt(meta, 14)
+    FillEntryAutoFromPath = True
+    Exit Function
+failFill:
+    FillEntryAutoFromPath = False
+End Function
 
 Public Sub LoadVideoFromFinderSelection()
     LoadVideoMetadata "loadVideoFromFinder", "LoadVideoFromFinderSelection"
@@ -710,68 +1234,41 @@ Private Function SheetHeaderRow(ws As Worksheet) As Long
     SheetHeaderRow = HEADER_ROW
 End Function
 
-' --- Form sheets (Entry / VideoEntry): A=label, B=value ---
+' --- Form sheets (Entry / VideoEntry) ---
+' Layout supports label/value pairs in columns A/B, C/D, and E/F
+' (e.g. Name in A with Camera in C on the same row; Sequence* on one row).
 
 ' Write Entry/VideoEntry tags into the media file via exiftool (modifies the original).
+' Walks form labels dynamically; Keyword keys use legacy aliases where needed.
 Private Sub WriteCatalogTagsToFile(ByVal sheetName As String, ByVal path As String)
     Dim payload As String
     Dim raw As String
     Dim parts() As String
-    Dim rating As String
-    Dim species As String
-    Dim behavior As String
-    Dim locale As String
-    Dim sendUK As String
-    Dim viewTag As String
-    Dim lighting As String
-    Dim causticAim As String
-    Dim causticAppearance As String
-    Dim filters As String
-    Dim notes As String
+    Dim labels As Variant
+    Dim i As Long
+    Dim label As String
+    Dim keyName As String
+    Dim val As String
+    Dim blob As String
+    Dim anyTag As Boolean
 
-    Dim sequence As String
-    Dim sequenceID As String
-    Dim sequencePos As String
+    labels = FieldListFromForm(sheetName)
+    blob = ""
+    anyTag = False
+    For i = LBound(labels) To UBound(labels)
+        label = CStr(labels(i))
+        If IsWritebackField(label) Then
+            keyName = KeywordKeyForLabel(label)
+            val = Trim$(CStr(FormValue(sheetName, label)))
+            If Len(val) > 0 Then anyTag = True
+            If Len(blob) > 0 Then blob = blob & "|"
+            blob = blob & keyName & "=" & val
+        End If
+    Next i
 
-    rating = Trim$(CStr(FormValue(sheetName, "Rating")))
-    species = Trim$(CStr(FormValue(sheetName, "Species")))
-    behavior = Trim$(CStr(FormValue(sheetName, "Behavior")))
-    locale = Trim$(CStr(FormValue(sheetName, "Locale")))
-    sendUK = Trim$(CStr(FormValue(sheetName, "Send to UK")))
-    viewTag = Trim$(CStr(FormValue(sheetName, "View")))
-    lighting = Trim$(CStr(FormValue(sheetName, "Lighting")))
-    causticAim = Trim$(CStr(FormValue(sheetName, "Caustic camera aim")))
-    causticAppearance = Trim$(CStr(FormValue(sheetName, "Caustic appearance")))
-    filters = Trim$(CStr(FormValue(sheetName, "Filters")))
-    notes = Trim$(CStr(FormValue(sheetName, "notes")))
-    sequence = Trim$(CStr(FormValue(sheetName, "Sequence")))
-    sequenceID = Trim$(CStr(FormValue(sheetName, "SequenceID")))
-    sequencePos = Trim$(CStr(FormValue(sheetName, "SequencePos")))
+    If Not anyTag Then Exit Sub
 
-    If Len(rating) = 0 And Len(species) = 0 And Len(behavior) = 0 And Len(locale) = 0 And _
-       Len(sendUK) = 0 And Len(viewTag) = 0 And Len(lighting) = 0 And _
-       Len(causticAim) = 0 And Len(causticAppearance) = 0 And Len(filters) = 0 And _
-       Len(notes) = 0 And _
-       Len(sequence) = 0 And Len(sequenceID) = 0 And Len(sequencePos) = 0 Then
-        Exit Sub
-    End If
-
-    ' Labeled fields (order-independent) — must match StriderFinderMeta.writeTagsToFile keys.
-    payload = path & vbTab & _
-              "Rating=" & rating & "|" & _
-              "Species=" & species & "|" & _
-              "Behavior=" & behavior & "|" & _
-              "Locale=" & locale & "|" & _
-              "SendToUK=" & sendUK & "|" & _
-              "View=" & viewTag & "|" & _
-              "Lighting=" & lighting & "|" & _
-              "CausticAim=" & causticAim & "|" & _
-              "CausticAppearance=" & causticAppearance & "|" & _
-              "Filters=" & filters & "|" & _
-              "notes=" & notes & "|" & _
-              "Sequence=" & sequence & "|" & _
-              "SequenceID=" & sequenceID & "|" & _
-              "SequencePos=" & sequencePos
+    payload = path & vbTab & blob
 
 #If Mac Then
     On Error GoTo appleScriptMissing
@@ -798,35 +1295,208 @@ appleScriptMissing:
            "Run scripts/install_mac_helpers.sh, then restart Excel.", vbExclamation
 End Sub
 
+' Camera / identity fields — not written as Keywords.
+Private Function IsWritebackField(ByVal label As String) As Boolean
+    Select Case label
+        Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
+             "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Duration", "FrameRate", "Resolution"
+            IsWritebackField = False
+        Case Else
+            IsWritebackField = True
+    End Select
+End Function
+
+' Legacy keyword spellings so existing files stay consistent; else PascalCase words.
+Private Function KeywordKeyForLabel(ByVal label As String) As String
+    Select Case label
+        Case "Send to UK"
+            KeywordKeyForLabel = "SendToUK"
+        Case "Caustic camera aim"
+            KeywordKeyForLabel = "CausticAim"
+        Case "Caustic appearance"
+            KeywordKeyForLabel = "CausticAppearance"
+        Case "notes", "Note"
+            KeywordKeyForLabel = "notes"
+        Case Else
+            KeywordKeyForLabel = PascalCaseKey(label)
+    End Select
+End Function
+
+' Entry "Note" maps to Photos/Videos header "notes".
+Private Function CatalogHeaderName(ByVal fieldLabel As String) As String
+    If StrComp(fieldLabel, "Note", vbTextCompare) = 0 Then
+        CatalogHeaderName = "notes"
+    Else
+        CatalogHeaderName = fieldLabel
+    End If
+End Function
+
+Private Function LabelsMatch(ByVal a As String, ByVal b As String) As Boolean
+    If StrComp(a, b, vbTextCompare) = 0 Then
+        LabelsMatch = True
+        Exit Function
+    End If
+    If (StrComp(a, "Note", vbTextCompare) = 0 And StrComp(b, "notes", vbTextCompare) = 0) Or _
+       (StrComp(a, "notes", vbTextCompare) = 0 And StrComp(b, "Note", vbTextCompare) = 0) Then
+        LabelsMatch = True
+    End If
+End Function
+
+' Real form fields only — skips instructions and Metadata preview rows.
+Private Function IsFormFieldLabel(ByVal label As String) As Boolean
+    If Len(label) = 0 Then Exit Function
+    Select Case label
+        Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
+             "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Duration", "FrameRate", "Resolution", _
+             "Sequence", "SequenceID", "SequencePos", _
+             "notes", "Note"
+            IsFormFieldLabel = True
+        Case Else
+            IsFormFieldLabel = IsClickPickField(label)
+    End Select
+End Function
+
+Private Function ColLetter(ByVal col As Long) As String
+    Dim n As Long
+    Dim rem_ As Long
+    Dim s As String
+    n = col
+    Do While n > 0
+        rem_ = (n - 1) Mod 26
+        s = Chr$(65 + rem_) & s
+        n = (n - 1) \ 26
+    Loop
+    ColLetter = s
+End Function
+
+Private Function PascalCaseKey(ByVal label As String) As String
+    Dim parts() As String
+    Dim i As Long
+    Dim w As String
+    Dim out As String
+    Dim ch As String
+    Dim cleaned As String
+    Dim j As Long
+
+    parts = Split(Replace(Replace(Trim$(label), "-", " "), "_", " "), " ")
+    out = ""
+    For i = LBound(parts) To UBound(parts)
+        w = Trim$(parts(i))
+        If Len(w) = 0 Then GoTo nextWord
+        cleaned = ""
+        For j = 1 To Len(w)
+            ch = Mid$(w, j, 1)
+            If (ch >= "A" And ch <= "Z") Or (ch >= "a" And ch <= "z") Or (ch >= "0" And ch <= "9") Then
+                cleaned = cleaned & ch
+            End If
+        Next j
+        If Len(cleaned) = 0 Then GoTo nextWord
+        out = out & UCase$(Left$(cleaned, 1)) & Mid$(cleaned, 2)
+nextWord:
+    Next i
+    PascalCaseKey = out
+End Function
+
+' Field list from Entry / VideoEntry label columns A/C/E (skips instructions).
+Private Function FieldListFromForm(ByVal sheetName As String) As Variant
+    Dim labels() As String
+    Dim n As Long
+    Dim r As Long
+    Dim c As Long
+    Dim label As String
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim labelCols As Variant
+    Dim i As Long
+    Dim dup As Boolean
+    Dim j As Long
+
+    Set ws = Worksheets(sheetName)
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If ws.Cells(ws.Rows.Count, 3).End(xlUp).Row > lastRow Then _
+        lastRow = ws.Cells(ws.Rows.Count, 3).End(xlUp).Row
+    labelCols = Array(1, 3, 5)
+    n = 0
+    ReDim labels(0 To 0)
+    For r = ENTRY_FIRST_FIELD_ROW To lastRow + 5
+        For i = LBound(labelCols) To UBound(labelCols)
+            c = CLng(labelCols(i))
+            label = Trim$(CStr(ws.Cells(r, c).Value))
+            If IsFormFieldLabel(label) Then
+                dup = False
+                For j = 0 To n - 1
+                    If LabelsMatch(labels(j), label) Then dup = True: Exit For
+                Next j
+                If Not dup Then
+                    ReDim Preserve labels(0 To n)
+                    labels(n) = label
+                    n = n + 1
+                End If
+            End If
+        Next i
+    Next r
+    If n = 0 Then
+        FieldListFromForm = Array()
+    Else
+        FieldListFromForm = labels
+    End If
+End Function
+
 Private Function PhotoFieldList() As Variant
-    PhotoFieldList = Array( _
-        "Name", "Path", "Date", "Time", "Type", "FileSize", "Camera", "Mode", "Lens", _
-        "Speed", "f-stop", "ISO", "Sequence", "SequenceID", "SequencePos", _
-        "Rating", "Species", "Behavior", "Locale", _
-        "Send to UK", "View", "Lighting", _
-        "Caustic camera aim", "Caustic appearance", "Filters", "notes")
+    PhotoFieldList = FieldListFromForm(ENTRY_SHEET)
 End Function
 
 Private Function VideoFieldList() As Variant
-    VideoFieldList = Array( _
-        "Name", "Path", "Date", "Time", "Type", "FileSize", "Duration", "FrameRate", _
-        "Resolution", "Camera", "Speed", "f-stop", "ISO", _
-        "Rating", "Species", "Behavior", "Locale", "Send to UK", "View", "Lighting", _
-        "Caustic camera aim", "Caustic appearance", "Filters", "notes")
+    VideoFieldList = FieldListFromForm(VIDEO_ENTRY_SHEET)
+End Function
+
+' Find label in cols A/C/E; outCol is the adjacent value column (B/D/F).
+Private Function FindFormField(ByVal sheetName As String, ByVal fieldName As String, _
+                               ByRef outRow As Long, ByRef outCol As Long) As Boolean
+    Dim ws As Worksheet
+    Dim r As Long
+    Dim c As Long
+    Dim lastRow As Long
+    Dim label As String
+    Dim labelCols As Variant
+    Dim i As Long
+
+    outRow = 0
+    outCol = 0
+    FindFormField = False
+    Set ws = Worksheets(sheetName)
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If ws.Cells(ws.Rows.Count, 3).End(xlUp).Row > lastRow Then _
+        lastRow = ws.Cells(ws.Rows.Count, 3).End(xlUp).Row
+    labelCols = Array(1, 3, 5)
+    For r = ENTRY_FIRST_FIELD_ROW To lastRow + 5
+        For i = LBound(labelCols) To UBound(labelCols)
+            c = CLng(labelCols(i))
+            label = Trim$(CStr(ws.Cells(r, c).Value))
+            If LabelsMatch(label, fieldName) Then
+                outRow = r
+                outCol = c + 1
+                FindFormField = True
+                Exit Function
+            End If
+        Next i
+    Next r
 End Function
 
 Private Function FormValue(ByVal sheetName As String, fieldName As String) As Variant
     Dim r As Long
-    r = FormRowFor(sheetName, fieldName)
-    If r = 0 Then Exit Function
-    FormValue = Worksheets(sheetName).Cells(r, 2).Value
+    Dim c As Long
+    If Not FindFormField(sheetName, fieldName, r, c) Then Exit Function
+    FormValue = Worksheets(sheetName).Cells(r, c).Value
 End Function
 
 Private Sub SetFormValue(ByVal sheetName As String, fieldName As String, value As Variant)
     Dim r As Long
-    r = FormRowFor(sheetName, fieldName)
-    If r = 0 Then Exit Sub
-    Worksheets(sheetName).Cells(r, 2).Value = value
+    Dim c As Long
+    If Not FindFormField(sheetName, fieldName, r, c) Then Exit Sub
+    Worksheets(sheetName).Cells(r, c).Value = value
 End Sub
 
 ' Photo Entry wrappers (keep existing LoadFromFinderSelection calls working)
@@ -844,9 +1514,9 @@ End Sub
 
 Private Sub SetFormTextValue(ByVal sheetName As String, fieldName As String, value As Variant)
     Dim r As Long
-    r = FormRowFor(sheetName, fieldName)
-    If r = 0 Then Exit Sub
-    With Worksheets(sheetName).Cells(r, 2)
+    Dim c As Long
+    If Not FindFormField(sheetName, fieldName, r, c) Then Exit Sub
+    With Worksheets(sheetName).Cells(r, c)
         .NumberFormat = "@"
         .Value = CStr(value)
     End With
@@ -858,9 +1528,9 @@ End Sub
 
 Private Sub FormatFormField(ByVal sheetName As String, fieldName As String, ByVal numFmt As String)
     Dim r As Long
-    r = FormRowFor(sheetName, fieldName)
-    If r = 0 Then Exit Sub
-    Worksheets(sheetName).Cells(r, 2).NumberFormat = numFmt
+    Dim c As Long
+    If Not FindFormField(sheetName, fieldName, r, c) Then Exit Sub
+    Worksheets(sheetName).Cells(r, c).NumberFormat = numFmt
 End Sub
 
 Private Sub FormatCatalogField(ws As Worksheet, ByVal rowNum As Long, headerName As String, ByVal numFmt As String)
@@ -871,21 +1541,13 @@ Private Sub FormatCatalogField(ws As Worksheet, ByVal rowNum As Long, headerName
 End Sub
 
 Private Function FormRowFor(ByVal sheetName As String, fieldName As String) As Long
-    Dim ws As Worksheet
     Dim r As Long
-    Dim lastRow As Long
-    Dim label As String
-
-    Set ws = Worksheets(sheetName)
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-    For r = ENTRY_FIRST_FIELD_ROW To lastRow
-        label = Trim$(CStr(ws.Cells(r, 1).Value))
-        If StrComp(label, fieldName, vbTextCompare) = 0 Then
-            FormRowFor = r
-            Exit Function
-        End If
-    Next r
-    FormRowFor = 0
+    Dim c As Long
+    If FindFormField(sheetName, fieldName, r, c) Then
+        FormRowFor = r
+    Else
+        FormRowFor = 0
+    End If
 End Function
 
 Private Sub ClearFormFields(ByVal sheetName As String, fields As Variant)
@@ -900,19 +1562,21 @@ Private Sub CopyFormFieldsToRow(ByVal sheetName As String, ws As Worksheet, ByVa
     Dim nm As String
     For i = LBound(fields) To UBound(fields)
         nm = CStr(fields(i))
-        SetCellByHeader ws, destRow, nm, FormValue(sheetName, nm)
+        SetCellByHeader ws, destRow, CatalogHeaderName(nm), FormValue(sheetName, nm)
     Next i
 End Sub
 
 Private Sub EnsureColumns(ws As Worksheet, fields As Variant)
     Dim i As Long
     Dim nm As String
+    Dim hdrName As String
     Dim hdr As Long
     hdr = SheetHeaderRow(ws)
     For i = LBound(fields) To UBound(fields)
         nm = CStr(fields(i))
-        If HeaderCol(ws, nm) = 0 Then
-            ws.Cells(hdr, HeaderLastCol(ws) + 1).Value = nm
+        hdrName = CatalogHeaderName(nm)
+        If HeaderCol(ws, hdrName) = 0 Then
+            ws.Cells(hdr, HeaderLastCol(ws) + 1).Value = hdrName
         End If
     Next i
 End Sub

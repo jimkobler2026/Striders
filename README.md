@@ -1,127 +1,385 @@
 # Striders
 
-Media catalog and notes for water strider biology, with a focus on behavior and caustics in photos and videos.
+Media catalog and field notes for water strider biology, with a focus on behavior and caustics in photos and videos.
 
-## Catalog workbook
+The **Strider Media Catalog** is a Mac Excel (`.xlsm`) workbook wired to Finder, Preview, exiftool, and a few Python tools. It is “smart” in that cataloguing is not just typing into a spreadsheet: loading a file pulls camera metadata, click-pick tags write back into the image, sequences can be pre-tagged on disk, filenames can be made unique across card reformats, and selected photos can be AI-captioned into a Captions sheet.
 
-**Which file to open**
+Agent session notes: `[HANDOFF.md](HANDOFF.md)`.
 
-| File | Role |
-|---|---|
-| [`catalog/Strider_Media_Catalog.xlsm`](catalog/Strider_Media_Catalog.xlsm) | **Working copy** — day-to-day catalog (macros + your rows) |
-| [`catalog/Strider_Media_Catalog_blank.xlsm`](catalog/Strider_Media_Catalog_blank.xlsm) | **Template of record** — empty starter with same layout/macros; copy this for a fresh catalog |
-| `catalog/build/Strider_Media_Catalog.xlsx` | Build skeleton only (no macros) — do not use for daily work |
-| `catalog/build/Strider_Media_Catalog_blank.xlsm` | Mirror of the blank template |
+---
 
-Always open a `.xlsm`. Session notes for agents: [`HANDOFF.md`](HANDOFF.md).
 
-Sheets:
 
-- **Entry** — add photos (`LoadFromFinderSelection` → tag → `AppendPhotoRow`)
-- **VideoEntry** — add videos (`LoadVideoFromFinderSelection` → tag → `AppendVideoRow`)
-- **Photos** / **Videos** — catalogs
-- **Captions** — AI photo captions (prompt at top; Ctrl+Shift+Y from Photos). Default: Gemini Flash
-- **Lists** — click-to-pick vocabularies (edit here to change options)
-- **ReadMe** — short in-workbook notes
+## How the smart catalog works
 
-**Photos columns:**  
-Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, Caustic camera aim, Caustic appearance, Filters, notes
+### Big picture
 
-**Videos columns:**  
-Name, Path, Date, Time, Type, FileSize, Duration, FrameRate, Resolution, Camera, Speed, f-stop, ISO, Rating, Species, Behavior, Locale, Send to UK, View, Lighting, Caustic camera aim, Caustic appearance, Filters, notes
+```text
+Camera card → temp dump folder under ~/Pictures/environmental caustics
+    → rename_media_unique.py   (unique basenames)
+    → tag_sequences.py         (optional: Sequence* keywords)
+    → Preview cull + Excel Entry/VideoEntry
+         Load (Finder or Preview) → click-pick tags → Append
+    → Photos / Videos sheets (+ Keywords written into the file)
+    → optional CaptionSelectedPhotos → Captions sheet
+```
 
-**View options:** surface, bottom, both, from below, eye level
+Excel never shells out to arbitrary scripts by path alone. On Mac, VBA calls **AppleScriptTask** helpers installed under:
 
-### First-time setup
+`~/Library/Application Scripts/com.microsoft.Excel/`
 
-Prefer an existing `.xlsm` (working copy or blank template). Only rebuild from the `.xlsx` skeleton as a last resort.
+Those helpers run exiftool (and, for captions, a small shell bridge into `scripts/caption_photo.py`).
+
+### What makes it “smart”
+
+1. **Load fills the form from the file** — Date/Time, camera, exposure, and any Sequence* keywords already on the file.
+2. **Click-pick vocabularies** — Options live on **Lists** and on Entry/VideoEntry columns C+; clicking an option copies into the value cell (column B, or D/F for side-by-side auto fields).
+3. **Append does two things** — Adds/updates a row on **Photos** or **Videos**, and writes tagged metadata back into the media file (Rating, Description/notes, Location, Keywords).
+4. **Fields are discovered at runtime** — Macros read Entry/VideoEntry labels (columns A/C/E) and Lists headers. New click-pick tags do not require editing VBA or AppleScript key lists (after the one-time dynamic-field upgrade).
+5. **Append matches by filename** — Re-appending the same basename updates that catalog row. That is why dumps are renamed before ingest when camera names recycle.
+6. **Captions are optional and on demand** — Select Photos rows → Ctrl+Shift+Y; the Captions sheet is created if missing.
+
+
+
+### Recommended ingest loop
+
+1. Copy card contents into a folder under `~/Pictures/environmental caustics/…`.
+2. Rename for uniqueness (`rename_media_unique.py --recursive --write`).
+3. Optionally tag continuous bursts (`tag_sequences.py --recursive --write`; default minimum **4** frames).
+4. Open a **copy** of the blank `.xlsm` (your working catalog).
+5. Cull in Preview: **I** load → tag → **W** append → **D** trash reject (photos). Videos: **U** / **E** → tag → **R**.
+6. **Sequences:** load/tag the **1/n** frame on Entry, then **Ctrl+Shift+S** (`AppendPhotoSequence`) to import every frame with those tags (each keeps its own SequencePos).
+7. Later: filter on Photos/Videos; **O** / **J** to reopen or reveal; **Y** to caption keepers.
+
+---
+
+
+
+## Sequence tagging and bulk import
+
+Two separate steps: **tag bursts on disk**, then **bulk-append into Excel** using the first frame’s user tags.
+
+### 1. Tag sequences on disk (`tag_sequences.py`)
+
+Scans a dump folder for Continuous / Hi / Hi+ frames, clusters them by capture-time gap (default 1 s), and writes Keywords:
+
+| Keyword | Example | Meaning |
+|---------|---------|---------|
+| `Sequence` | `yes` or `no` | In a qualifying burst, or Continuous but too short / alone |
+| `SequenceID` | `20261102-091557` | Shared id for the burst (usually start timestamp) |
+| `SequencePos` | `3/22` | Position within the burst (stored as **text**, not an Excel fraction) |
+
+Rules that matter in practice:
+
+- Only Continuous/Hi/Hi+ are eligible; single-shot and phone dumps usually stay untagged.
+- Default **`--min-frames 4`**: clusters of 2–3 get `Sequence:no` (no ID/pos).
+- JPEG+RAW pairs at the same instant count as two frames toward the minimum.
+- Dry-run by default; add `--write` (and `--force` to rewrite existing Sequence* tags).
+- Use `--recursive` for nested DCIM-style dumps.
 
 ```bash
-chmod +x scripts/*.sh
+# One dump
+python3 scripts/tag_sequences.py "~/Pictures/environmental caustics/my-dump" --recursive --write
+
+# All dumps under environmental caustics
+for d in ~/Pictures/environmental\ caustics/*/; do
+  python3 scripts/tag_sequences.py "$d" --recursive --write --force
+done
+```
+
+Inspect afterward with `list_sequences.py` (CSV of SequenceID / bounds / counts).
+
+### 2. Bulk import into the catalog (`Ctrl+Shift+S`)
+
+Goal: tag the representative frame once, then append every sibling with the same user metadata.
+
+1. Run `tag_sequences.py --write` on the dump first (so SequenceID / SequencePos exist).
+2. In Preview (or Finder), open the **1/n** frame of a sequence.
+3. **Ctrl+Shift+I** (or **Q**) to load it into Entry — Sequence* fields fill from the file.
+4. Click-pick Species, Behavior, Locale, caustic fields, notes, etc. on that one frame.
+5. **Ctrl+Shift+S** (`AppendPhotoSequence`):
+   - Finds every file in the same folder with that SequenceID (`list_sequence_members.py` via `StriderSequence.sh`).
+   - Appends each to Photos (updates if the basename already exists).
+   - Copies **your Entry user tags** onto every frame.
+   - Keeps each frame’s own camera EXIF and its own SequencePos (`1/n`, `2/n`, …).
+6. Continue culling; use **W** for singles, **S** whenever Entry is sitting on a tagged sequence member.
+
+Prerequisites: helpers installed (`./scripts/install_mac_helpers.sh`), Excel restarted, current `CatalogMacros.bas` imported so **S** is bound.
+
+---
+
+
+
+## Workbooks and sheets
+
+
+
+### Which Excel file to use
+
+
+| File                                                                                   | Role                                                                                                        |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `[catalog/Strider_Media_Catalog_blank.xlsm](catalog/Strider_Media_Catalog_blank.xlsm)` | **Template of record** — empty starter with layout + macros. **Duplicate this** to start a working catalog. |
+| `catalog/build/Strider_Media_Catalog_blank.xlsm`                                       | Mirror of the blank (keep in sync when the blank changes).                                                  |
+
+
+Always open a `.xlsm`. Do not use a build `.xlsx` skeleton for daily work (no macros). Prefer duplicating the blank over running `setup_workbook.sh` (that script can overwrite a working catalog).
+
+### Sheets
+
+
+| Sheet          | Purpose                                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Entry**      | Photo staging form: load metadata, click-pick tags, append to Photos.                                           |
+| **VideoEntry** | Same for videos → Videos.                                                                                       |
+| **Photos**     | Photo catalog (one row per file).                                                                               |
+| **Videos**     | Video catalog.                                                                                                  |
+| **Lists**      | Vocabularies for click-pick tags (header row 2; options from row 3).                                            |
+| **Captions**   | AI captions (created on first Ctrl+Shift+Y). Row 1 title, row 2 prompt, row 3 hint, row 4 headers, row 5+ data. |
+| **ReadMe**     | Short in-workbook notes.                                                                                        |
+
+
+**Entry / VideoEntry layout notes**
+
+- Instructions and a Ctrl+Shift cheat sheet sit above the fields.
+- Auto/camera fields may use **A/B** and **C/D** on the same row (e.g. Name | Camera).
+- Sequence fields may share one row: Sequence (A/B), SequenceID (C/D), SequencePos (E/F).
+- User tags use label in **A**, value in **B**, options in **C+**.
+- `Note` on Entry maps to the Photos/Videos column `notes`.
+- **Metadata written to file on Append** is a live formula preview of what Append will write.
+
+Typical **Photos** columns include: Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Lighting, Caustic camera aim, Caustic appearance, Filters, Panopticon portfolio, notes (plus any fields you add).
+
+---
+
+
+
+## Keyboard shortcuts
+
+Control key, not ⌘. Bound by `Auto_Open` → `AssignMacroShortcuts` after `CatalogMacros.bas` is imported.
+
+
+| Shortcut         | Macro                           | What it does                                    |
+| ---------------- | ------------------------------- | ----------------------------------------------- |
+| Ctrl+Shift+**Q** | `LoadFromFinderSelection`       | Load Finder-selected photo into Entry           |
+| Ctrl+Shift+**I** | `LoadFromPreviewSelection`      | Load front Preview photo into Entry             |
+| Ctrl+Shift+**W** | `AppendPhotoRow`                | Append Entry → Photos + write tags to file      |
+| Ctrl+Shift+**E** | `LoadVideoFromFinderSelection`  | Load Finder-selected video into VideoEntry      |
+| Ctrl+Shift+**U** | `LoadVideoFromPreviewSelection` | Load front Preview video into VideoEntry        |
+| Ctrl+Shift+**R** | `AppendVideoRow`                | Append VideoEntry → Videos + write tags to file |
+| Ctrl+Shift+**O** | `OpenSelectedInPreview`         | Open selected Photos/Videos paths in Preview    |
+| Ctrl+Shift+**J** | `RevealSelectedInFinder`        | Reveal selected paths in Finder                 |
+| Ctrl+Shift+**D** | `TrashFrontPreviewDocument`     | Preview → Move Selected Image to Trash          |
+| Ctrl+Shift+**Y** | `CaptionSelectedPhotos`         | Caption selected Photos rows → Captions sheet   |
+| Ctrl+Shift+**K** | `AddCatalogField`               | Prompt to add a new click-pick tag everywhere   |
+| Ctrl+Shift+**S** | `AppendPhotoSequence`           | Append all frames of Entry’s SequenceID (tags from 1/n) |
+
+
+If OnKey does nothing on your Excel build: **Tools → Customize Keyboard…** → Macros → assign the same keys.
+
+---
+
+
+
+## Macros (`catalog/macros/CatalogMacros.bas`)
+
+Import this module into the VBA project (remove any old **CatalogMacros** / **AppEvents** first; AppEvents breaks Mac Excel).
+
+
+| Macro                                                            | Role                                                                             |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `Auto_Open` / `Auto_Close`                                       | Enable events; assign / clear OnKey shortcuts                                    |
+| `AssignMacroShortcuts` / `ClearMacroShortcuts`                   | Bind or clear Ctrl+Shift keys                                                    |
+| `FixEnableEvents`                                                | Re-enable sheet events if click-pick dies                                        |
+| `HandleEntryOptionClick` / `PickSelectedOption`                  | Click-pick: option cell → value cell (Lists-driven)                              |
+| `LoadFromFinderSelection` / `LoadFromPreviewSelection`           | Photo load via AppleScript + exiftool                                            |
+| `LoadVideoFromFinderSelection` / `LoadVideoFromPreviewSelection` | Video load                                                                       |
+| `AppendPhotoRow` / `AppendCatalogRow`                            | Write Photos row + tag write-back                                                |
+| `AppendVideoRow`                                                 | Write Videos row + tag write-back                                                |
+| `TrashFrontPreviewDocument`                                      | Reject current Preview document                                                  |
+| `OpenSelectedInPreview` / `RevealSelectedInFinder`               | Review helpers                                                                   |
+| `CaptionSelectedPhotos`                                          | Batch AI captions for selection                                                  |
+| `AddCatalogField`                                                | Add Lists column, Entry/VideoEntry rows, Photos/Videos columns, metadata preview |
+| `AppendPhotoSequence`                                            | Bulk-append every photo sharing Entry’s SequenceID; shared tags from Entry (use 1/n); per-frame EXIF + SequencePos |
+
+
+**Runtime field discovery**
+
+- Form field lists come from Entry/VideoEntry labels in columns A/C/E (instructions and “Metadata written…” rows are skipped).
+- Click-pick fields are those whose label matches a **Lists** header.
+- Tag write-back sends labeled `key=value|…` payloads; Keyword keys use legacy aliases where needed (`Send to UK` → `SendToUK`, caustic fields, `Note`/`notes` → `notes`).
+
+**Sheet event stubs** (paste into each sheet’s code module):
+
+- `[catalog/macros/EntrySheet_SelectionChange.txt](catalog/macros/EntrySheet_SelectionChange.txt)`
+- `[catalog/macros/VideoEntrySheet_SelectionChange.txt](catalog/macros/VideoEntrySheet_SelectionChange.txt)`
+
+---
+
+
+
+## AppleScript helpers (source + installed copies)
+
+
+
+### Source (repo)
+
+
+| File                                                                                               | Role                                                                                                         |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `[catalog/macros/StriderFinderMeta.applescript](catalog/macros/StriderFinderMeta.applescript)`     | Finder/Preview paths; photo/video exiftool metadata; trash front Preview; **generic** catalog tag write-back |
+| `[catalog/macros/StriderOpenPreview.applescript](catalog/macros/StriderOpenPreview.applescript)`   | Open paths in Preview                                                                                        |
+| `[catalog/macros/StriderRevealFinder.applescript](catalog/macros/StriderRevealFinder.applescript)` | Reveal paths in Finder                                                                                       |
+| `[catalog/macros/StriderCaption.applescript](catalog/macros/StriderCaption.applescript)`           | Bridge Excel → `StriderCaption.sh` → `caption_photo.py`                                                      |
+
+
+
+
+### Installed location (required for macros)
+
+`~/Library/Application Scripts/com.microsoft.Excel/`
+
+
+| Installed file             | From                                                     |
+| -------------------------- | -------------------------------------------------------- |
+| `StriderFinderMeta.scpt`   | `StriderFinderMeta.applescript`                          |
+| `StriderOpenPreview.scpt`  | `StriderOpenPreview.applescript`                         |
+| `StriderRevealFinder.scpt` | `StriderRevealFinder.applescript`                        |
+| `StriderCaption.scpt`      | `StriderCaption.applescript`                             |
+| `StriderCaption.sh`        | Generated by `install_mac_helpers.sh` (paths + provider) |
+| `StriderSequence.sh`       | Generated by `install_mac_helpers.sh` (list sequence members) |
+
+
+Install / refresh:
+
+```bash
 ./scripts/install_mac_helpers.sh
-# Last resort — overwrites the working-copy .xlsm (refused unless --force):
-# ./scripts/setup_workbook.sh --force
 ```
 
-1. Open the **working copy** or a **copy of the blank template**; enable macros.
-2. **Tools → Macro → Visual Basic…**
-3. Delete old **CatalogMacros** / **AppEvents** if present (AppEvents breaks on Mac; there is no AppEvents source in `catalog/macros/` anymore).
-4. **File → Import File…** → `catalog/macros/CatalogMacros.bas`
-5. One-click picks:
-   - **Microsoft Excel Objects → Entry** → paste `catalog/macros/EntrySheet_SelectionChange.txt`
-   - **Microsoft Excel Objects → VideoEntry** → paste `catalog/macros/VideoEntrySheet_SelectionChange.txt`
-6. Save as `.xlsm`. Restart Excel after installing helpers.
+Then restart Excel.
 
-After layout/macro tweaks you care about, keep the blank `.xlsm` in sync (and optionally mirror it into `catalog/build/`).
+**Tag write-back behavior (on Append):** Rating → EXIF/XMP Rating; notes/Note → Description/Caption (empty clears); Locale → Location + Keywords; every other non-empty tag key → Keywords/Subject as `Key:value`. Blank Sequence* on the form preserves Sequence* already on the file.
 
-Macros:
+---
 
-- `LoadFromFinderSelection` / `LoadFromPreviewSelection` / `AppendPhotoRow` (alias: `AppendCatalogRow`)
-- `LoadVideoFromFinderSelection` / `LoadVideoFromPreviewSelection` / `AppendVideoRow`
-- `TrashFrontPreviewDocument` — Preview’s own **Edit → Move Selected Image to Trash** (Ctrl+Shift+D)
-- `PickSelectedOption` — click an option in C+, then run this to fill column B
-- `OpenSelectedInPreview` / `RevealSelectedInFinder` (Photos or Videos)
-- `CaptionSelectedPhotos` — Nat Geo–style captions for selected Photos rows → **Captions** sheet
 
-Keyboard shortcuts (Control key, not ⌘). Old L/A/M/F combos conflict with Excel built-ins (filter, formula args, Copilot, fonts).
 
-Installed by `AssignMacroShortcuts` / `Auto_Open` after re-importing `CatalogMacros.bas`:
+## Python and shell scripts (`scripts/`)
 
-| Shortcut | Macro |
-|---|---|
-| Control+Shift+Q | LoadFromFinderSelection |
-| Control+Shift+I | LoadFromPreviewSelection (front Preview doc) |
-| Control+Shift+W | AppendPhotoRow |
-| Control+Shift+E | LoadVideoFromFinderSelection |
-| Control+Shift+U | LoadVideoFromPreviewSelection |
-| Control+Shift+R | AppendVideoRow |
-| Control+Shift+O | OpenSelectedInPreview |
-| Control+Shift+J | RevealSelectedInFinder |
-| Control+Shift+D | TrashFrontPreviewDocument (via Preview menu) |
-| Control+Shift+Y | CaptionSelectedPhotos (Gemini Flash by default) |
 
-If OnKey still does nothing on your Mac Excel build, use **Tools → Customize Keyboard…** → category **Macros** → assign the same keys (or ⌥ letter keys, which that dialog supports).
+| Script                                                     | Touches workbook?             | Purpose                                                                                                                                         |
+| ---------------------------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[install_mac_helpers.sh](scripts/install_mac_helpers.sh)` | No                            | Compile/install AppleScript helpers + caption shell bridge                                                                                      |
+| `[rename_media_unique.py](scripts/rename_media_unique.py)` | No                            | Prefix `YYYYMMDD-HHMMSS_` onto media under `~/Pictures/environmental caustics` (dry-run default; `--write`; `--recursive` for DCIM-style dumps) |
+| `[tag_sequences.py](scripts/tag_sequences.py)`             | No                            | Tag Continuous/Hi/Hi+ bursts by capture gap; `--min-frames` default **4**; writes Sequence* Keywords                                            |
+| `[list_sequences.py](scripts/list_sequences.py)`           | No                            | CSV of SequenceID / start / end / frame count from Keywords                                                                                     |
+| `[list_sequence_members.py](scripts/list_sequence_members.py)` | No                        | Paths + SequencePos for one SequenceID (used by AppendPhotoSequence)                                                                            |
+| `[caption_photo.py](scripts/caption_photo.py)`             | No*                           | Vision caption CLI (`--machine` for Excel). Can optionally read workbook metadata for context                                                   |
+| `[add_catalog_field.py](scripts/add_catalog_field.py)`     | **Yes** (open book)           | CLI alternative to Ctrl+Shift+K; also patches `build_catalog.py` / blank when possible                                                          |
+| `[add_sequence_fields.py](scripts/add_sequence_fields.py)` | **Yes** (open book)           | One-time insert of Sequence columns into an older workbook                                                                                      |
+| `[build_catalog.py](scripts/build_catalog.py)`             | Writes `catalog/build/*.xlsx` | Rebuild spreadsheet **skeleton** only (no macros)                                                                                               |
+| `[setup_workbook.sh](scripts/setup_workbook.sh)`           | **Dangerous**                 | Cold rebuild of a `.xlsm` shell; refuses overwrite unless `--force`                                                                             |
+| `[apply_video_sheets.py](scripts/apply_video_sheets.py)`   | **Yes** (open book)           | Legacy helper to add/fix VideoEntry + Videos (usually already present)                                                                          |
 
-Requires [exiftool](https://exiftool.org/) (`brew install exiftool`).
 
-### Tag photo sequences (hi / hi+ / Continuous)
+**Rare / maintenance AppleScripts in** `scripts/`
 
-Before culling, tag a folder of photos by capture-time proximity. Skips non-continuous drive modes by default. Dry-run first:
+
+| File                               | Purpose                       |
+| ---------------------------------- | ----------------------------- |
+| `setup_xlsm.applescript`           | Used by cold workbook setup   |
+| `upgrade_entry_layout.applescript` | One-off layout upgrade helper |
+
+
+
+
+### Example commands
 
 ```bash
-python3 scripts/tag_sequences.py "/path/to/DCIM/folder"
-python3 scripts/tag_sequences.py "/path/to/DCIM/folder" --write
+# Unique names (nested DCIM dumps)
+python3 scripts/rename_media_unique.py "~/Pictures/environmental caustics/my-dump" --recursive --write
+
+# Sequences (≥4 frames)
+python3 scripts/tag_sequences.py "~/Pictures/environmental caustics/my-dump" --recursive --write
+
+# Captions from Terminal
+python3 scripts/caption_photo.py /path/to/photo.JPG --plain
+python3 scripts/caption_photo.py /path/to/photo.JPG --provider anthropic --plain
 ```
 
-Writes Keywords/Subject: `Sequence:yes|no`, `SequenceID:YYYYMMDD-HHMMSS`, `SequencePos:6/54`.  
-Load into Entry picks these up; Append preserves them.
+API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `StriderCaption.sh`); fallback repo `.env` (gitignored). Providers: `google` (Gemini Flash, default), `anthropic`, `openai`.
 
-To add the Sequence columns to an existing open workbook:
+---
 
-```bash
-python3 scripts/add_sequence_fields.py   # workbook must already be open in Excel
-```
 
-Then re-import `catalog/macros/CatalogMacros.bas` and reinstall helpers (`./scripts/install_mac_helpers.sh`).
 
-### Add a photo
+## Ancillary files and locations
 
-1. Select the file in **Finder**, *or* step to it in **Preview** (multi-file cull).
-2. Run **LoadFromFinderSelection** (Ctrl+Shift+Q) or **LoadFromPreviewSelection** (Ctrl+Shift+I).
-3. Click an option in columns **C+** (tags) — it copies into column B.
-4. Run **AppendPhotoRow** (also writes tags into the original file via exiftool).
 
-### Add a video
 
-1. Select the video in **Finder**, or open it in **Preview**.
-2. Run **LoadVideoFromFinderSelection** (Ctrl+Shift+E) or **LoadVideoFromPreviewSelection** (Ctrl+Shift+U).
-3. Click tag options in columns **C+** on **VideoEntry**.
-4. Run **AppendVideoRow** (also writes tags into the original file).
+### In the repo
 
-**Tag write-back on Append:** Rating → `Rating`/`XMP:Rating`; notes → Description/Caption; Locale → Location; Species/Behavior/Locale/SendToUK/View/Lighting/CausticAim/CausticAppearance/Filters/Sequence* → Keywords / Subject (`Species:…`, `CausticAim:…`, etc.). Modifies the original file in place.
 
-### Review
+| Path                                                 | What it is                                                                              |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `catalog/Strider_Media_Catalog_blank.xlsm`           | Canonical empty catalog template                                                        |
+| `catalog/build/Strider_Media_Catalog_blank.xlsm`     | Mirror of blank                                                                         |
+| `catalog/macros/CatalogMacros.bas`                   | VBA source of record                                                                    |
+| `catalog/macros/*.applescript`                       | Helper sources                                                                          |
+| `catalog/macros/EntrySheet_SelectionChange.txt`      | Entry sheet event stub                                                                  |
+| `catalog/macros/VideoEntrySheet_SelectionChange.txt` | VideoEntry sheet event stub                                                             |
+| `catalog/macros/caption_prompt.txt`                  | Canonical caption prompt (keep in sync with VBA `CaptionPromptText` if both are edited) |
+| `scripts/*`                                          | Tools listed above                                                                      |
+| `HANDOFF.md`                                         | Agent/session handoff notes                                                             |
+| `.env` (optional, gitignored)                        | Local API keys fallback                                                                 |
 
-1. On **Photos** or **Videos**, filter as needed.
-2. Select **Name** / **Path** cells or rows.
-3. Run **OpenSelectedInPreview** or **RevealSelectedInFinder**.
+
+
+
+### Outside the repo (machine-local)
+
+
+| Path                                                                  | What it is                                      |
+| --------------------------------------------------------------------- | ----------------------------------------------- |
+| `~/Library/Application Scripts/com.microsoft.Excel/Strider*.scpt`     | Compiled helpers Excel may call                 |
+| `~/Library/Application Scripts/com.microsoft.Excel/StriderCaption.sh` | Caption bridge script                           |
+| `~/Pictures/environmental caustics/`                                  | Allowed root for `rename_media_unique.py` dumps |
+| `../Virtual_Nexus/.env`                                               | Preferred API key file for captions             |
+
+
+
+
+### Dependencies
+
+- Mac Microsoft Excel with macros enabled  
+- [exiftool](https://exiftool.org/) (`brew install exiftool`)  
+- Python 3 (scripts); `xlwings` for scripts that drive an open workbook; vision API access for captions
+
+---
+
+
+
+## First-time setup
+
+1. Duplicate `catalog/Strider_Media_Catalog_blank.xlsm` → your working `.xlsm`.
+2. Install helpers and restart Excel:
+  ```bash
+   chmod +x scripts/*.sh
+   ./scripts/install_mac_helpers.sh
+  ```
+3. Open the working `.xlsm`; enable macros.
+4. If macros are missing or outdated: VBE → remove old **CatalogMacros** / **AppEvents** → Import `catalog/macros/CatalogMacros.bas` → paste Entry/VideoEntry SelectionChange stubs → Save.
+5. Smoke-test: Load (I/Q), click-pick, Append (W), AddCatalogField (K), Caption (Y), sequence bulk Append (S).
+
+
+
+### Adding a catalog tag later
+
+Prefer **Ctrl+Shift+K** inside Excel (updates Lists, Entry, VideoEntry, Photos, Videos, and the metadata preview). Existing catalog rows stay blank in the new column.
+
+### Safety
+
+- Do **not** casually run `setup_workbook.sh` — it can overwrite a working `.xlsm` (requires `--force`).
+- Deleting Photos/Videos **rows** only removes catalog entries, not files on disk. Captions rows are not auto-deleted with them.
+- Keep the blank template updated when Entry layout or macros change, then mirror into `catalog/build/` if desired.
+

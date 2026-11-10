@@ -1,7 +1,7 @@
 # Striders media catalog — handoff
 
-**Date:** 2026-11-09 (evening) → continue morning of 2026-11-10  
-**Status:** Captions + labeled tag write-back are in git. **Excel still needs a morning bootstrap** (re-import `.bas`, install helpers, restart). Do that before testing Ctrl+Shift+Y.
+**Date:** 2026-11-09 (evening) → updated evening for foolproof field adds  
+**Status:** Captions + **dynamic catalog fields** in repo. **Excel needs a one-time bootstrap** after pull: re-import `.bas`, `./scripts/install_mac_helpers.sh`, restart. Then new tags are workbook-only via `add_catalog_field.py`.
 
 **Canonical files**
 
@@ -70,9 +70,19 @@ Prompt refinements already in place: ~60 words; trust photographer notes; count 
 
 Photos & Videos (+ Entry forms, Lists, build_catalog) include: **Caustic camera aim**, **Caustic appearance**, **Filters**. Live + blank `.xlsm` updated in repo.
 
-### Sequences (already on main from earlier today)
+### Sequences
 
-`scripts/tag_sequences.py`, `list_sequences.py`, `add_sequence_fields.py` — Sequence / SequenceID / SequencePos via Keywords. SequencePos stored as **text** (e.g. `6/54`), not Excel fraction.
+`scripts/tag_sequences.py`, `list_sequences.py`, `list_sequence_members.py`, `add_sequence_fields.py` — Sequence / SequenceID / SequencePos via Keywords. SequencePos stored as **text** (e.g. `6/54`), not Excel fraction. `tag_sequences.py` requires **≥4 frames** (`--min-frames`) before `Sequence:yes`.
+
+**Bulk import:** load/tag the **1/n** frame on Entry → **Ctrl+Shift+S** (`AppendPhotoSequence`) seeds every SequenceID sibling with those user tags (per-frame EXIF + SequencePos preserved). Needs `StriderSequence.sh` from `install_mac_helpers.sh`. See README “Sequence tagging and bulk import”.
+
+### Foolproof field adds (new)
+
+| Piece | Role |
+|---|---|
+| `scripts/add_catalog_field.py` | One CLI: Lists + Entry/VideoEntry + Photos/Videos + `build_catalog.py` sync |
+| `CatalogMacros.bas` | Field lists from Entry labels; click-pick from Lists headers; generic write-back |
+| `StriderFinderMeta.applescript` | Generic `key=value` → Keywords (Rating/notes/Locale/Sequence specials) |
 
 ---
 
@@ -101,6 +111,8 @@ Photos & Videos (+ Entry forms, Lists, build_catalog) include: **Caustic camera 
 | O / J | Open Preview / Reveal Finder |
 | D | Trash front Preview doc |
 | **Y** | **CaptionSelectedPhotos** → Captions sheet |
+| **K** | **AddCatalogField** → prompts; adds Lists/Entry/Photos/Videos tag |
+| **S** | **AppendPhotoSequence** → all frames of Entry SequenceID (seed tags from 1/n) |
 
 Re-import `CatalogMacros.bas` after macro edits so `Auto_Open` rebinds keys.
 
@@ -113,12 +125,14 @@ Re-import `CatalogMacros.bas` after macro edits so `Auto_Open` rebinds keys.
 | `install_mac_helpers.sh` | No — only Application Scripts |
 | `caption_photo.py` | No — files / stdout only |
 | `tag_sequences.py` | No — folder you pass |
+| `rename_media_unique.py` | No — folder under `~/Pictures/environmental caustics` |
+| `add_catalog_field.py` | **Yes** — open workbook (+ blank sync); also patches `build_catalog.py` |
 | `build_catalog.py` | No — `catalog/build/*.xlsx` |
 | `add_sequence_fields.py` | **Yes** — open workbook |
 | `setup_workbook.sh` | **Yes — overwrites** unless careful; needs `--force` |
 
 Helpers path: `~/Library/Application Scripts/com.microsoft.Excel/`  
-(`StriderFinderMeta`, `StriderOpenPreview`, `StriderRevealFinder`, **`StriderCaption`**, **`StriderCaption.sh`**)
+(`StriderFinderMeta`, `StriderOpenPreview`, `StriderRevealFinder`, **`StriderCaption`**, **`StriderCaption.sh`**, **`StriderSequence.sh`**)
 
 ---
 
@@ -139,7 +153,9 @@ After VBA prompt edits: re-import `.bas`. Existing Captions sheets already have 
 - Helpers **must** be reinstalled for captioning; last session confirmed only the three older `.scpt` files were present.
 - Do **not** keep an **AppEvents** class module (breaks Mac Excel).
 - Do **not** run `setup_workbook.sh` casually — overwrites working `.xlsm`.
-- Append matches by **filename**; empty notes clears file caption.
+- Append matches by **filename**; empty notes clears file caption. Run `rename_media_unique.py` on new dumps before cull so recycled camera names cannot overwrite the wrong row.
+- **Field adds:** prefer Excel **Ctrl+Shift+K** (`AddCatalogField`). CLI `add_catalog_field.py` is optional (also syncs blank/`build_catalog.py`). Never hand-edit Lists/Entry/`IsClickPickField` / AppleScript key lists.
+- **Entry layout (user-edited):** auto fields may sit in A/B **and** C/D (e.g. Name|Camera); Sequence* can share one row (A/B, C/D, E/F). `Note` aliases to catalog header `notes`. Macros discover label cols A/C/E.
 - Claude sometimes undercounts tiny striders; Gemini Flash is the cheap default and was acceptable in testing.
 - Test images used: `_DSC9895`, `_DSC0320` (notes + count), `_DSC7924` (notes incorporation).
 
@@ -147,12 +163,11 @@ After VBA prompt edits: re-import `.bas`. Existing Captions sheets already have 
 
 ## Suggested next steps (tomorrow)
 
-1. Morning checklist above (import + helpers + smoke Ctrl+Shift+Y).  
-2. Confirm Captions prompt is visible at top and data lands under row-4 headers.  
-3. Optional: switch one caption to `anthropic` and compare quality vs Flash.  
-4. Real Preview cull session (I → tag → W → D).  
-5. If Captions layout looks good, ensure blank `.xlsm` includes a Captions sheet (or rely on EnsureCaptionsSheet) and mirror into `catalog/build/` if desired.  
-6. Commit only if further edits — today’s work should already be on `origin/main`.
+1. One-time: re-import `CatalogMacros.bas` + `./scripts/install_mac_helpers.sh` + restart Excel (dynamic fields + generic write-back).  
+2. Smoke Ctrl+Shift+Y captions; confirm click-pick still works from Lists.  
+3. Re-import `.bas` again for **AddCatalogField** (Ctrl+Shift+K), then try adding a test tag and Save.  
+4. Real Preview cull: rename dump (`rename_media_unique.py --recursive --write`), then I → tag → W → D.  
+5. Re-tag sequences with `--min-frames 4 --write --force` on dumps that still have short Sequence:yes.
 
 ---
 
