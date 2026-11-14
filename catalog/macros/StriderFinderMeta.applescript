@@ -1,5 +1,5 @@
 -- Excel AppleScriptTask helpers: Finder selection + exiftool metadata
--- Photo return: OK <tab> path <tab> Name|ext|mime|dto|create|size|shutter|aperture|iso|camera|mode|lens
+-- Photo return: OK <tab> path <tab> Name|ext|mime|dto|create|size|shutter|aperture|iso|camera|mode|lens|focus|gps|serial|vertPix|horPix|haveRaw|seq|seqID|seqPos
 -- Video return: OK <tab> path <tab> Name|ext|mime|create|mediaCreate|size|duration|fps|width|height|deviceModel|model|shutter|aperture|iso
 
 on loadFromFinder(dummy)
@@ -243,8 +243,16 @@ on writeTagsToFile(posixPath, tagBlob)
                     set v to text (eq + 1) thru -1 of t
                 end if
                 -- Rating is not a Keyword; notes also go into Description NOTE: section
+                -- HaveRaw Y/N → bare keywords rawYes / rawNo (not HaveRaw:Y)
                 if k is "Rating" then
                     -- skip
+                else if k is "HaveRaw" or k is "HaveRaw?" then
+                    set hv to my upperText(v)
+                    if hv is "Y" or hv is "YES" then
+                        set end of kwList to "rawYes"
+                    else if hv is "N" or hv is "NO" then
+                        set end of kwList to "rawNo"
+                    end if
                 else if k is "notes" then
                     if v is not "" then set end of kwList to "notes:" & v
                 else if k is "Sequence" or k is "SequenceID" or k is "SequencePos" then
@@ -406,6 +414,24 @@ on fieldValue(tagBlob, keyName)
     return ""
 end fieldValue
 
+-- Y if this file is a camera RAW, or a sibling RAW shares the same basename (Sony/Canon/Nikon/Fuji/DNG).
+on siblingRawFlag(posixPath)
+    set sh to "f=" & quoted form of posixPath & "; d=$(dirname \"$f\"); b=$(basename \"$f\"); stem=${b%.*}; ext=$(printf %s \"${b##*.}\" | tr '[:upper:]' '[:lower:]'); case \"$ext\" in arw|cr2|cr3|nef|nrw|raf|dng) echo Y; exit 0;; esac; for e in arw ARW cr2 CR2 cr3 CR3 nef NEF nrw NRW raf RAF dng DNG; do if [ -f \"$d/$stem.$e\" ]; then echo Y; exit 0; fi; done; echo N"
+    try
+        set flag to do shell script sh
+        if flag is "Y" or flag is "N" then return flag
+    end try
+    return "N"
+end siblingRawFlag
+
+on upperText(s)
+    try
+        return do shell script "printf %s " & quoted form of (s as text) & " | tr '[:lower:]' '[:upper:]'"
+    on error
+        return s as text
+    end try
+end upperText
+
 on trimText(s)
     set s to s as text
     repeat while s starts with " " or s starts with tab or s starts with return or s starts with linefeed
@@ -458,13 +484,14 @@ on metadataLine(posixPath)
         return "ERROR" & tab & "File not found: " & posixPath
     end try
 
-    -- 12 FocusDistance2; 13 GPSPosition; 14 SerialNumber; then Sequence*.
-    set fmt to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensID|$FocusDistance2|$GPSPosition|$SerialNumber"
+    -- 12 FocusDistance2; 13 GPSPosition; 14 SerialNumber; 15 ImageHeight (VertPix); 16 ImageWidth (HorPix);
+    -- then HaveRaw Y/N; then Sequence*.
+    set fmt to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensID|$FocusDistance2|$GPSPosition|$SerialNumber|$ImageHeight|$ImageWidth"
     set cmd to quoted form of exif & " -m -s3 -p " & quoted form of fmt & " " & quoted form of posixPath
     try
         set meta to do shell script cmd
     on error errMsg
-        set fmt2 to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensModel|$FocusDistance2|$GPSPosition|$SerialNumber"
+        set fmt2 to "$FileName|$FileTypeExtension|$MIMEType|$DateTimeOriginal|$CreateDate|$FileSize|$ExposureTime|$FNumber|$ISO|$Model|$ExposureProgram|$LensModel|$FocusDistance2|$GPSPosition|$SerialNumber|$ImageHeight|$ImageWidth"
         set cmd2 to quoted form of exif & " -m -s3 -p " & quoted form of fmt2 & " " & quoted form of posixPath
         try
             set meta to do shell script cmd2
@@ -473,6 +500,7 @@ on metadataLine(posixPath)
         end try
     end try
 
+    set meta to meta & "|" & (my siblingRawFlag(posixPath))
     set seqFields to my readSequenceFields(posixPath)
     set meta to meta & "|" & (item 1 of seqFields) & "|" & (item 2 of seqFields) & "|" & (item 3 of seqFields)
     -- Fourth/fifth fields: NOTE and CAPTION bodies from Description (legacy plain = note)

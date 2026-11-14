@@ -6,6 +6,23 @@
 -- Returns: OK <tab> provider <tab> model <tab> words <tab> caption
 --      or: ERROR <tab> message
 
+-- Editable caption popup for Mac Excel (UserForms are not available in Mac VBE).
+-- payload: current caption text
+-- Returns: OK <tab> edited text   or   CANCEL
+on editCaption(payload)
+    set currentText to payload
+    try
+        set dlg to display dialog "Edit caption (Save writes catalog + file):" default answer currentText buttons {"Cancel", "Save"} default button "Save" with title "Caption"
+        return "OK" & tab & (text returned of dlg)
+    on error errMsg number errNum
+        if errNum is -128 then
+            return "CANCEL"
+        else
+            return "ERROR" & tab & errMsg
+        end if
+    end try
+end editCaption
+
 on captionPhoto(payload)
     set photoPath to ""
     set provider to "google"

@@ -2,7 +2,7 @@
 
 Media catalog and field notes for water strider biology, with a focus on behavior and caustics in photos and videos.
 
-The **Strider Media Catalog** is a Mac Excel (`.xlsm`) workbook wired to Finder, Preview, exiftool, and a few Python tools. It is “smart” in that cataloguing is not just typing into a spreadsheet: loading a file pulls camera metadata, click-pick tags write back into the image, sequences can be pre-tagged on disk, filenames can be made unique across card reformats, and selected photos can be AI-captioned into a Captions sheet.
+The **Strider Media Catalog** is a Mac Excel (`.xlsm`) workbook wired to Finder, Preview, exiftool, and a few Python tools. It is “smart” in that cataloguing is not just typing into a spreadsheet: loading a file pulls camera metadata, click-pick tags write back into the image, sequences can be pre-tagged on disk, filenames can be made unique across card reformats, and selected photos can be AI-captioned into a Photos **Caption** column (editable popup).
 
 Agent session notes: `[HANDOFF.md](HANDOFF.md)`.
 
@@ -21,7 +21,7 @@ Camera card → temp ingest folder under ~/Pictures/environmental caustics
     → Preview cull + Excel Entry/VideoEntry
          Load (Finder or Preview) → click-pick tags → Append
     → Photos / Videos sheets (+ Keywords written into the file)
-    → optional CaptionSelectedPhotos → Captions sheet
+    → optional CaptionSelectedPhotos → Photos Caption column (+ file embed)
 ```
 
 Excel never shells out to arbitrary scripts by path alone. On Mac, VBA calls **AppleScriptTask** helpers installed under:
@@ -37,7 +37,7 @@ Those helpers run exiftool (and, for captions, a small shell bridge into `script
 3. **Append does two things** — Adds/updates a row on **Photos** or **Videos**, and writes tagged metadata back into the media file (Rating, Description NOTE section, Location, Keywords).
 4. **Fields are discovered at runtime** — Macros read Entry/VideoEntry labels (columns A/C/E) and Lists headers. New click-pick tags do not require editing VBA or AppleScript key lists (after the one-time dynamic-field upgrade).
 5. **Append matches by filename** — Re-appending the same basename updates that catalog row. That is why ingest folders are renamed before cataloguing when camera names recycle.
-6. **Captions are optional and on demand** — Select Photos rows → Ctrl+Shift+Y; writes the Captions sheet and embeds `CAPTION:` into `MWG:Description` (preserves any `NOTE:`).
+6. **Captions are optional and on demand** — Select Photos rows → Ctrl+Shift+Y; writes the Photos **Caption** column and embeds `CAPTION:` into `MWG:Description` (preserves any `NOTE:`). Click a Caption cell to edit in a popup (Save re-embeds).
 
 
 
@@ -137,7 +137,6 @@ Always open a `.xlsm`. Do not use a build `.xlsx` skeleton for daily work (no ma
 | **Photos**     | Photo catalog (one row per file).                                                                               |
 | **Videos**     | Video catalog.                                                                                                  |
 | **Lists**      | Vocabularies for click-pick tags (header row 2; options from row 3).                                            |
-| **Captions**   | AI captions (created on first Ctrl+Shift+Y). Row 1 title, row 2 prompt, row 3 hint, row 4 headers, row 5+ data. |
 | **ReadMe**     | Short in-workbook notes.                                                                                        |
 
 
@@ -151,7 +150,7 @@ Always open a `.xlsm`. Do not use a build `.xlsx` skeleton for daily work (no ma
 - `Note` on Entry maps to the Photos/Videos column `notes`, and on Append merges into `MWG:Description` as `NOTE:` (see Description layout above).
 - **Metadata written to file on Append** is a live preview of what Append will write. `Description → NOTE:` tracks the Entry Note; `Description → CAPTION:` is filled on Load (Append preserves any CAPTION already on the file; Ctrl+Shift+Y sets it).
 
-Typical **Photos** columns include: Name, Path, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Focus Distance, GPS, Serial Number, Lighting, Caustic camera aim, Caustic appearance, Filters, Panopticon portfolio, notes (plus any fields you add). Focus Distance, GPS, and Serial Number are read-only Load fields (not Keyword write-back); Load never overwrites Locale from GPS.
+Typical **Photos** columns include: Name, Path, HaveRaw?, Date, Time, Sequence, SequenceID, SequencePos, Rating, Species, Behavior, Locale, Type, FileSize, VertPix, HorPix, Send to UK, View, Camera, Mode, Lens, Speed, f-stop, ISO, Focus Distance, GPS, Serial Number, Lighting, Caustic camera aim, Caustic appearance, Filters, Panopticon portfolio, notes, Caption (plus any fields you add). **HaveRaw?** is Y/N when a sibling camera RAW (`.arw` / `.cr2` / `.cr3` / `.nef` / `.nrw` / `.raf` / `.dng`) shares the basename, or the file itself is RAW. **VertPix** / **HorPix** are image height/width. On Append, keywords get `rawYes` or `rawNo` plus `VertPix:` / `HorPix:`. Focus Distance, GPS, Serial Number, and Caption are not Keyword write-back; Load never overwrites Locale from GPS. **Double-click** a **Name** cell to open that file in Preview (or select rows → Ctrl+Shift+O). Click a **Caption** cell to open the editable popup.
 
 ---
 
@@ -170,10 +169,10 @@ Control key, not ⌘. Bound by `Auto_Open` → `AssignMacroShortcuts` after `Cat
 | Ctrl+Shift+**E** | `LoadVideoFromFinderSelection`  | Load Finder-selected video into VideoEntry      |
 | Ctrl+Shift+**U** | `LoadVideoFromPreviewSelection` | Load front Preview video into VideoEntry        |
 | Ctrl+Shift+**R** | `AppendVideoRow`                | Append VideoEntry → Videos + write tags to file |
-| Ctrl+Shift+**O** | `OpenSelectedInPreview`         | Open selected Photos/Videos paths in Preview    |
+| Ctrl+Shift+**O** | `OpenSelectedInPreview`         | Open selected Photos/Videos paths in Preview (also: double-click Name) |
 | Ctrl+Shift+**J** | `RevealSelectedInFinder`        | Reveal selected paths in Finder                 |
 | Ctrl+Shift+**D** | `TrashFrontPreviewDocument`     | Preview → Move Selected Image to Trash          |
-| Ctrl+Shift+**Y** | `CaptionSelectedPhotos`         | Caption → Captions sheet + embed `CAPTION:`     |
+| Ctrl+Shift+**Y** | `CaptionSelectedPhotos`         | Photos: select Name/row(s) → Caption column + embed |
 | Ctrl+Shift+**K** | `AddCatalogField`               | Prompt to add a new click-pick tag everywhere   |
 | Ctrl+Shift+**S** | `AppendPhotoSequence`           | Append all frames of Entry’s SequenceID (tags from 1/n) |
 
@@ -202,8 +201,11 @@ Import this module into the VBA project (remove any old **CatalogMacros** / **Ap
 | `AppendPhotoRow` / `AppendCatalogRow`                            | Write Photos row + tag write-back                                                |
 | `AppendVideoRow`                                                 | Write Videos row + tag write-back                                                |
 | `TrashFrontPreviewDocument`                                      | Reject current Preview document                                                  |
-| `OpenSelectedInPreview` / `RevealSelectedInFinder`               | Review helpers                                                                   |
-| `CaptionSelectedPhotos`                                          | Batch AI captions for selection                                                  |
+| `OpenSelectedInPreview` / `RevealSelectedInFinder`               | Review helpers (also Name double-click → Preview)                                |
+| `HandleCatalogNameDoubleClick` / `StripCatalogNameHyperlinks`    | Name double-click opens Preview; strip legacy Name hyperlinks                    |
+| `CaptionSelectedPhotos`                                          | Batch AI captions → Photos Caption column + file embed                           |
+| `HandleCatalogCaptionClick` / `CommitCaptionEdit`                | Caption cell → Mac edit dialog; Save writes cell + embed                         |
+| `MigrateCaptionsSheetToPhotos`                                   | One-shot import from legacy Captions sheet into Photos Caption                   |
 | `AddCatalogField`                                                | Add Lists column, Entry/VideoEntry rows, Photos/Videos columns, metadata preview |
 | `AppendPhotoSequence`                                            | Bulk-append every photo sharing Entry’s SequenceID; shared tags from Entry (use 1/n); per-frame EXIF + SequencePos |
 
@@ -218,6 +220,10 @@ Import this module into the VBA project (remove any old **CatalogMacros** / **Ap
 
 - `[catalog/macros/EntrySheet_SelectionChange.txt](catalog/macros/EntrySheet_SelectionChange.txt)`
 - `[catalog/macros/VideoEntrySheet_SelectionChange.txt](catalog/macros/VideoEntrySheet_SelectionChange.txt)`
+- `[catalog/macros/PhotosSheet_SelectionChange.txt](catalog/macros/PhotosSheet_SelectionChange.txt)`
+- `[catalog/macros/VideosSheet_SelectionChange.txt](catalog/macros/VideosSheet_SelectionChange.txt)`
+
+Caption edit uses a Mac AppleScript dialog (`StriderCaption.scpt` → `editCaption`). Mac Excel has no UserForm designer — do not import `.frm` files.
 
 ---
 
@@ -263,7 +269,7 @@ Install / refresh:
 
 Then restart Excel.
 
-**Tag write-back behavior (on Append):** Uses exiftool **MWG** composites so overlapping namespaces stay in sync — Rating → `MWG:Rating` (XMP); Locale → `MWG:Location` (+ Keywords); other tags → `MWG:Keywords` (`Key:value`, IPTC+XMP). Blank Sequence* on the form preserves Sequence* already on the file. Writes use **`-P`** so Finder Date Modified / file create times are not bumped to “now” (`tag_sequences.py` likewise).
+**Tag write-back behavior (on Append):** Uses exiftool **MWG** composites so overlapping namespaces stay in sync — Rating → `MWG:Rating` (XMP); Locale → `MWG:Location` (+ Keywords); other tags → `MWG:Keywords` (`Key:value`, IPTC+XMP). **HaveRaw?** → bare keyword `rawYes` or `rawNo`; **VertPix** / **HorPix** → `VertPix:` / `HorPix:`. Blank Sequence* on the form preserves Sequence* already on the file. Writes use **`-P`** so Finder Date Modified / file create times are not bumped to “now” (`tag_sequences.py` likewise).
 
 **`MWG:Description` layout (NOTE / CAPTION):** One Description field may hold optional sections:
 
@@ -273,8 +279,8 @@ CAPTION: Nat Geo–style AI caption
 ```
 
 - **Ctrl+Shift+W (Append):** merges the Entry Note into the `NOTE:` section; preserves any existing `CAPTION:`. Empty Note removes `NOTE:` only (does not clear `CAPTION:`). Non-empty Note is also written as a `notes:…` Keyword.
-- **Ctrl+Shift+Y (Caption):** merges the AI caption into the `CAPTION:` section; preserves any existing `NOTE:`; still writes the Captions sheet.
-- **Load:** Entry Note is filled from the `NOTE:` body (or from legacy unprefixed Description text). CAPTION text stays on the file only.
+- **Ctrl+Shift+Y (Caption):** merges the AI caption into the `CAPTION:` section; preserves any existing `NOTE:`; writes the Photos **Caption** column. Click that cell to edit; Save re-embeds.
+- **Load:** Entry Note is filled from the `NOTE:` body (or from legacy unprefixed Description text). CAPTION text stays on the file (and in Photos Caption after Y / migrate).
 - Sections may appear in either order; either may be absent. Delimiters are the literal prefixes `NOTE:` and `CAPTION:` (case-sensitive).
 
 ---
@@ -294,6 +300,7 @@ CAPTION: Nat Geo–style AI caption
 | `[find_duplicate_media.py](scripts/find_duplicate_media.py)` | No                          | Report ImageDataHash content duplicates (report only; metadata-independent)                                                                   |
 | `[copy_sequence_tags.py](scripts/copy_sequence_tags.py)`   | No                            | Copy user MWG tags from one sequence frame onto SequenceID siblings (dry-run default)                                                           |
 | `[caption_photo.py](scripts/caption_photo.py)`             | No*                           | Vision caption CLI (`--machine` for Excel; `--write` embeds `CAPTION:` into Description). Prefers embedded `PreviewImage` when present          |
+| `[fill_raw_and_pixels.py](scripts/fill_raw_and_pixels.py)` | No                            | HaveRaw? (sibling RAW) + VertPix/HorPix; `--catalog` fills open Photos sheet; `--write-keywords` stamps `rawYes`/`rawNo` + pixels               |
 | `[exif_datetime.py](scripts/exif_datetime.py)`             | No                            | Shared DateTimeOriginal + OffsetTimeOriginal parsing for rename / sequence tools                                                                |
 | `[geotag_ingest.py](scripts/geotag_ingest.py)`             | No                            | Optional GPX geotag for mirrorless ingest folders (dry-run default; destructive to GPS)                                                         |
 | `[stamp_ownership.py](scripts/stamp_ownership.py)`         | No                            | Optional MWG Creator/Copyright stamp via `STRIDER_ARTIST` / `STRIDER_COPYRIGHT`                                                                 |
@@ -353,6 +360,8 @@ API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `Strider
 | `catalog/macros/*.applescript`                       | Helper sources                                                                          |
 | `catalog/macros/EntrySheet_SelectionChange.txt`      | Entry sheet event stub                                                                  |
 | `catalog/macros/VideoEntrySheet_SelectionChange.txt` | VideoEntry sheet event stub                                                             |
+| `catalog/macros/PhotosSheet_SelectionChange.txt`     | Photos stub (Caption click + Name double-click)                                         |
+| `catalog/macros/VideosSheet_SelectionChange.txt`     | Videos stub (Caption click + Name double-click)                                         |
 | `catalog/macros/caption_prompt.txt`                  | Canonical caption prompt (keep in sync with VBA `CaptionPromptText` if both are edited) |
 | `scripts/*`                                          | Tools listed above                                                                      |
 | `HANDOFF.md`                                         | Agent/session handoff notes                                                             |
@@ -393,8 +402,9 @@ API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `Strider
    ./scripts/install_mac_helpers.sh
   ```
 3. Open the working `.xlsm`; enable macros.
-4. If macros are missing or outdated: VBE → remove old **CatalogMacros** / **AppEvents** → Import `catalog/macros/CatalogMacros.bas` → paste Entry/VideoEntry SelectionChange stubs → Save.
-5. Smoke-test: Load (I/Q), click-pick, Append (W), AddCatalogField (K), Caption (Y), sequence bulk Append (S).
+4. If macros are missing or outdated: VBE → remove old **CatalogMacros** / **AppEvents** → Import `catalog/macros/CatalogMacros.bas` → paste Entry/VideoEntry/Photos/Videos SelectionChange stubs → Save → run **`AssignMacroShortcuts`**. Re-run `./scripts/install_mac_helpers.sh` if caption helpers changed, then restart Excel.
+5. Smoke-test: Load (I/Q), click-pick, Append (W), AddCatalogField (K), Caption (Y), click Caption cell → edit → Save, sequence bulk Append (S).
+6. If an old **Captions** sheet still has rows: run macro **`MigrateCaptionsSheetToPhotos`**, then delete the Captions sheet if desired.
 
 
 
@@ -405,6 +415,6 @@ Prefer **Ctrl+Shift+K** inside Excel (updates Lists, Entry, VideoEntry, Photos, 
 ### Safety
 
 - Do **not** casually run `setup_workbook.sh` — it can overwrite a working `.xlsm` (requires `--force`).
-- Deleting Photos/Videos **rows** only removes catalog entries, not files on disk. Captions rows are not auto-deleted with them.
+- Deleting Photos/Videos **rows** only removes catalog entries, not files on disk (and does not clear embedded `CAPTION:` on the file).
 - Keep `catalog/build/Strider_Media_Catalog_blank.xlsm` updated when Entry layout or macros change.
 

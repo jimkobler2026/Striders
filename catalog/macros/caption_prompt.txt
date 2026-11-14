@@ -1,8 +1,8 @@
-You are writing a single National Geographic magazine photo caption.
+You are writing a single Scientific American–style photo caption.
 
 Requirements:
 - About 60 words (50–70 is fine). Prefer one compact paragraph.
-- Evocative, precise, scientifically curious — not flowery marketing copy.
+- Use plain, straightforward descriptive prose — clear and factual, as in a Scientific American article. Avoid lyrical, dramatic, or flowery wording.
 - Ground the caption in what is actually visible in the image (organisms, leaf, ripples, reflections, light on water). Metadata may name species/place/behavior; use it only when it fits what you see.
 - Photographer notes are trusted field observations — incorporate them when they fit the image (do not quote them verbatim unless natural).
 - Note any patterns of color, shape, or ripples.

@@ -34,9 +34,13 @@ Private Const ENTRY_FIRST_FIELD_ROW As Long = 9
 Private Const ENTRY_OPTION_FIRST_COL As Long = 3
 ' Default caption provider: google = Gemini Flash (cheap + good enough). Use "anthropic" for Claude.
 Private Const DEFAULT_CAPTION_PROVIDER As String = "google"
+' Guard so caption-edit dialog does not re-enter on SelectionChange.
+Private gCaptionEditorOpen As Boolean
 
 Public Sub Auto_Open()
     Application.EnableEvents = True
+    ' AssignMacroShortcuts also re-applies UserInterfaceOnly sheet protection
+    ' (that flag does not persist across reopen; without it macros get 1004).
     AssignMacroShortcuts
 End Sub
 
@@ -84,6 +88,86 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+k", "AddCatalogField"
     Application.OnKey "^+s", "AppendPhotoSequence"
     On Error GoTo 0
+    EnsureRawAndPixelFields
+    ReapplyUiOnlyProtection
+End Sub
+
+' One-shot / bootstrap: HaveRaw? (after Path), VertPix/HorPix (after FileSize) on Entry + Photos.
+Public Sub EnsureRawAndPixelFields()
+    Dim yn As Variant
+    Dim none As Variant
+    Dim structureOn As Boolean
+
+    yn = Array("Y", "N")
+    none = Array()
+
+    On Error Resume Next
+    structureOn = ThisWorkbook.ProtectStructure
+    UnprotectWorkbookStructure
+    UnprotectSheet Worksheets(ENTRY_SHEET)
+    UnprotectSheet Worksheets(PHOTOS_SHEET)
+    UnprotectSheet Worksheets(LISTS_SHEET)
+    On Error GoTo 0
+
+    On Error Resume Next
+    If ListsHeaderCol("HaveRaw?") = 0 Then InsertListsColumn "HaveRaw?", yn
+    InsertEntryFieldRow ENTRY_SHEET, "HaveRaw?", yn, "Path"
+    InsertEntryFieldRow ENTRY_SHEET, "VertPix", none, "FileSize"
+    InsertEntryFieldRow ENTRY_SHEET, "HorPix", none, "VertPix"
+    InsertCatalogColumn PHOTOS_SHEET, "HaveRaw?", "Path"
+    InsertCatalogColumn PHOTOS_SHEET, "VertPix", "FileSize"
+    InsertCatalogColumn PHOTOS_SHEET, "HorPix", "VertPix"
+    InsertHaveRawMetadataPreview ENTRY_SHEET
+    InsertMetadataPreviewRow ENTRY_SHEET, "VertPix"
+    InsertMetadataPreviewRow ENTRY_SHEET, "HorPix"
+    On Error GoTo 0
+
+    If structureOn Then ProtectWorkbookStructure
+End Sub
+
+Private Sub InsertHaveRawMetadataPreview(ByVal sheetName As String)
+    Dim ws As Worksheet
+    Dim fieldRow As Long
+    Dim valueCol As Long
+    Dim label As String
+    Dim r As Long
+    Dim sectionStart As Long
+    Dim insertAt As Long
+    Dim col As String
+
+    Set ws = Worksheets(sheetName)
+    If Not FindFormField(sheetName, "HaveRaw?", fieldRow, valueCol) Then Exit Sub
+    label = "Keyword rawYes/rawNo:"
+    For r = 1 To 200
+        If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), label, vbTextCompare) = 0 Then Exit Sub
+    Next r
+
+    sectionStart = 0
+    For r = 1 To 200
+        If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Metadata written to file on Append", vbTextCompare) = 0 Then
+            sectionStart = r
+            Exit For
+        End If
+    Next r
+    If sectionStart = 0 Then Exit Sub
+
+    insertAt = 0
+    For r = sectionStart + 1 To sectionStart + 40
+        If StrComp(Trim$(CStr(ws.Cells(r, 1).Value)), "Location → Locale", vbTextCompare) = 0 Or _
+           Left$(Trim$(CStr(ws.Cells(r, 1).Value)), 12) = "Description " Then
+            insertAt = r
+            Exit For
+        End If
+        If Len(Trim$(CStr(ws.Cells(r, 1).Value))) = 0 Then Exit For
+    Next r
+    If insertAt = 0 Then insertAt = sectionStart + 1
+
+    ws.Rows(insertAt).Insert Shift:=xlDown
+    ws.Cells(insertAt, 1).Value = label
+    ws.Cells(insertAt, 1).Font.Bold = True
+    col = ColLetter(valueCol)
+    ws.Cells(insertAt, 2).Formula = _
+        "=IF($" & col & "$" & fieldRow & "="""",""(none)"",IF(OR(UPPER($" & col & "$" & fieldRow & ")=""Y"",UPPER($" & col & "$" & fieldRow & ")=""YES""),""rawYes"",""rawNo""))"
 End Sub
 
 Public Sub ClearMacroShortcuts()
@@ -239,6 +323,9 @@ Private Sub InsertListsColumn(ByVal fieldName As String, opts As Variant)
     For i = LBound(opts) To UBound(opts)
         ws.Cells(LISTS_HEADER_ROW + 1 + (i - LBound(opts)), col).Value = opts(i)
     Next i
+    On Error Resume Next
+    ws.Range(ws.Cells(LISTS_HEADER_ROW, col), ws.Cells(200, col)).Locked = False
+    On Error GoTo 0
 End Sub
 
 Private Sub InsertEntryFieldRow(ByVal sheetName As String, ByVal fieldName As String, _
@@ -267,9 +354,27 @@ Private Sub InsertEntryFieldRow(ByVal sheetName As String, ByVal fieldName As St
     ws.Rows(insertAt).Insert Shift:=xlDown
     ws.Cells(insertAt, 1).Value = fieldName
     ws.Cells(insertAt, 1).Font.Bold = True
-    For i = LBound(opts) To UBound(opts)
-        ws.Cells(insertAt, ENTRY_OPTION_FIRST_COL + (i - LBound(opts))).Value = opts(i)
-    Next i
+    If IsArray(opts) Then
+        On Error Resume Next
+        For i = LBound(opts) To UBound(opts)
+            If Err.Number <> 0 Then Exit For
+            ws.Cells(insertAt, ENTRY_OPTION_FIRST_COL + (i - LBound(opts))).Value = opts(i)
+        Next i
+        On Error GoTo 0
+    End If
+    ' Sheet protection: inserted rows often inherit Locked=True — keep value/options editable.
+    UnlockEntryTagRow ws, insertAt
+End Sub
+
+' Under sheet protection, keep tag value (B) and options (C+) user-editable.
+Private Sub UnlockEntryTagRow(ByVal ws As Worksheet, ByVal rowNum As Long)
+    Dim lastOptCol As Long
+    On Error Resume Next
+    ws.Cells(rowNum, 2).Locked = False
+    ' C through CZ — room to type additional options later
+    lastOptCol = 104
+    ws.Range(ws.Cells(rowNum, ENTRY_OPTION_FIRST_COL), ws.Cells(rowNum, lastOptCol)).Locked = False
+    On Error GoTo 0
 End Sub
 
 ' Add Keyword preview under "Metadata written to file on Append".
@@ -368,6 +473,11 @@ Private Sub InsertCatalogColumn(ByVal sheetName As String, ByVal fieldName As St
     ws.Columns(col).Insert Shift:=xlToRight
     ws.Cells(hdr, col).Value = fieldName
     ws.Cells(hdr, col).Font.Bold = True
+    ' Keep catalog data cells editable under sheet protection.
+    On Error Resume Next
+    ws.Cells(hdr, col).Locked = True
+    ws.Range(ws.Cells(hdr + 1, col), ws.Cells(500, col)).Locked = False
+    On Error GoTo 0
 End Sub
 
 ' Click an option in columns C+, then run this macro (fills column B).
@@ -549,29 +659,8 @@ Private Sub LoadPhotoMetadata(ByVal appleHandler As String, ByVal macroName As S
     If Len(fileName) = 0 Then fileName = BaseName(path)
     stamp = FirstNonEmpty(dto, createDate)
 
-    SetEntryValue "Path", path
-    SetEntryValue "Name", fileName
-    SetEntryValue "Type", UCase$(ext)
-    SetEntryValue "FileSize", fileSize
-    SetEntryValue "Date", ExtractDate(stamp)
-    SetEntryValue "Time", ExtractTime(stamp)
-    FormatEntryField "Date", "m/d/yy"
-    FormatEntryField "Time", "[$-F400]h:mm:ss AM/PM"
-    SetEntryValue "Speed", shutter
-    SetEntryValue "f-stop", aperture
-    SetEntryValue "ISO", isoVal
-    SetEntryValue "Camera", camera
-    SetEntryValue "Mode", mode
-    SetEntryValue "Lens", lens
-    ' Focus Distance = Sony FocusDistance2 (e.g. "1.654 m"); blank on phones.
-    SetEntryValue "Focus Distance", MetaAt(meta, 12)
-    ' GPS = GPSPosition when geotagged (phones); does not touch Locale.
-    SetEntryValue "GPS", MetaAt(meta, 13)
-    SetEntryValue "Serial Number", MetaAt(meta, 14)
-    ' SequencePos is like 6/54 — must be text or Excel treats it as a fraction.
-    SetEntryTextValue "Sequence", MetaAt(meta, 15)
-    SetEntryTextValue "SequenceID", MetaAt(meta, 16)
-    SetEntryTextValue "SequencePos", MetaAt(meta, 17)
+    ApplyLoadedPhotoMeta path, fileName, ext, fileSize, stamp, shutter, aperture, isoVal, _
+                         camera, mode, lens, meta
     ' Description NOTE: → Entry Note; CAPTION: → Append preview only (preserved on file).
     If UBound(parts) >= 3 Then
         SetEntryValue "Note", parts(3)
@@ -590,6 +679,41 @@ Private Sub LoadPhotoMetadata(ByVal appleHandler As String, ByVal macroName As S
 appleScriptMissing:
     MsgBox "Could not run StriderFinderMeta.scpt (" & appleHandler & ")." & vbCrLf & _
            "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+End Sub
+
+' meta pipe: …|serial(14)|vertPix(15)|horPix(16)|haveRaw(17)|seq(18)|seqID(19)|seqPos(20)
+Private Sub ApplyLoadedPhotoMeta(ByVal path As String, ByVal fileName As String, _
+                                 ByVal ext As String, ByVal fileSize As String, _
+                                 ByVal stamp As String, ByVal shutter As String, _
+                                 ByVal aperture As String, ByVal isoVal As String, _
+                                 ByVal camera As String, ByVal mode As String, _
+                                 ByVal lens As String, meta() As String)
+    SetEntryValue "Path", path
+    SetEntryValue "Name", fileName
+    SetEntryValue "Type", UCase$(ext)
+    SetEntryValue "FileSize", fileSize
+    SetEntryValue "HaveRaw?", MetaAt(meta, 17)
+    SetEntryValue "Date", ExtractDate(stamp)
+    SetEntryValue "Time", ExtractTime(stamp)
+    FormatEntryField "Date", "m/d/yy"
+    FormatEntryField "Time", "[$-F400]h:mm:ss AM/PM"
+    SetEntryValue "Speed", shutter
+    SetEntryValue "f-stop", aperture
+    SetEntryValue "ISO", isoVal
+    SetEntryValue "Camera", camera
+    SetEntryValue "Mode", mode
+    SetEntryValue "Lens", lens
+    SetEntryValue "VertPix", MetaAt(meta, 15)
+    SetEntryValue "HorPix", MetaAt(meta, 16)
+    ' Focus Distance = Sony FocusDistance2 (e.g. "1.654 m"); blank on phones.
+    SetEntryValue "Focus Distance", MetaAt(meta, 12)
+    ' GPS = GPSPosition when geotagged (phones); does not touch Locale.
+    SetEntryValue "GPS", MetaAt(meta, 13)
+    SetEntryValue "Serial Number", MetaAt(meta, 14)
+    ' SequencePos is like 6/54 — must be text or Excel treats it as a fraction.
+    SetEntryTextValue "Sequence", MetaAt(meta, 18)
+    SetEntryTextValue "SequenceID", MetaAt(meta, 19)
+    SetEntryTextValue "SequencePos", MetaAt(meta, 20)
 End Sub
 
 Public Sub AppendCatalogRow()
@@ -776,7 +900,8 @@ End Sub
 ' User tags applied to every frame; not camera/identity/sequence fields.
 Private Function IsSequenceSeedField(ByVal label As String) As Boolean
     Select Case label
-        Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
+        Case "Name", "Path", "HaveRaw?", "Date", "Time", "Type", "FileSize", _
+             "VertPix", "HorPix", _
              "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
              "Focus Distance", "GPS", "Serial Number", _
              "Duration", "FrameRate", "Resolution", _
@@ -841,26 +966,8 @@ Private Function FillEntryAutoFromPath(ByVal posixPath As String) As Boolean
     If Len(fileName) = 0 Then fileName = BaseName(path)
     stamp = FirstNonEmpty(dto, createDate)
 
-    SetEntryValue "Path", path
-    SetEntryValue "Name", fileName
-    SetEntryValue "Type", UCase$(ext)
-    SetEntryValue "FileSize", fileSize
-    SetEntryValue "Date", ExtractDate(stamp)
-    SetEntryValue "Time", ExtractTime(stamp)
-    FormatEntryField "Date", "m/d/yy"
-    FormatEntryField "Time", "[$-F400]h:mm:ss AM/PM"
-    SetEntryValue "Speed", shutter
-    SetEntryValue "f-stop", aperture
-    SetEntryValue "ISO", isoVal
-    SetEntryValue "Camera", camera
-    SetEntryValue "Mode", mode
-    SetEntryValue "Lens", lens
-    SetEntryValue "Focus Distance", MetaAt(meta, 12)
-    SetEntryValue "GPS", MetaAt(meta, 13)
-    SetEntryValue "Serial Number", MetaAt(meta, 14)
-    SetEntryTextValue "Sequence", MetaAt(meta, 15)
-    SetEntryTextValue "SequenceID", MetaAt(meta, 16)
-    SetEntryTextValue "SequencePos", MetaAt(meta, 17)
+    ApplyLoadedPhotoMeta path, fileName, ext, fileSize, stamp, shutter, aperture, isoVal, _
+                         camera, mode, lens, meta
     If UBound(parts) >= 3 Then
         SetEntryValue "Note", parts(3)
     End If
@@ -1075,58 +1182,63 @@ appleScriptMissing:
 #End If
 End Sub
 
-' Generate Nat Geo–style captions for selected Photos rows → Captions sheet
-' and embed into the file as MWG:Description "CAPTION: …" (preserves any "NOTE: …").
-' Default provider: Gemini Flash (google). Override DEFAULT_CAPTION_PROVIDER for Claude etc.
+' Caption any time from Photos: select Name/Path cell(s) or whole row(s) → Ctrl+Shift+Y
+' (or Macros → CaptionSelectedPhotos). Writes Photos Caption column + embeds CAPTION: in the file.
+' Click a Caption cell to edit in a Mac dialog popup. Default provider: Gemini Flash.
 Public Sub CaptionSelectedPhotos()
     Dim paths As Collection
     Dim p As Variant
     Dim path As String
     Dim raw As String
     Dim parts() As String
-    Dim provider As String
-    Dim model As String
-    Dim words As String
     Dim caption As String
     Dim fileName As String
-    Dim ws As Worksheet
+    Dim photosWs As Worksheet
     Dim destRow As Long
     Dim okCount As Long
     Dim errCount As Long
+    Dim missCount As Long
     Dim embedFail As Long
-    Dim embedRaw As String
-    Dim embedParts() As String
     Dim sheetName As String
     Dim i As Long
 
     If Selection Is Nothing Then
-        MsgBox "Select photo rows on the Photos sheet.", vbExclamation
+        MsgBox "On the Photos sheet, select a Name (filename) cell, Path cell, or row(s), then run again.", vbExclamation
         Exit Sub
     End If
     sheetName = Selection.Worksheet.Name
     If StrComp(sheetName, PHOTOS_SHEET, vbTextCompare) <> 0 Then
-        MsgBox "Select rows on the Photos sheet, then run CaptionSelectedPhotos (Ctrl+Shift+Y).", vbExclamation
+        MsgBox "Switch to the Photos sheet, select Name/Path cell(s) or row(s)," & vbCrLf & _
+               "then Ctrl+Shift+Y (or Macros -> CaptionSelectedPhotos).", vbExclamation
         Exit Sub
     End If
 
+    Set photosWs = Worksheets(PHOTOS_SHEET)
     Set paths = CollectSelectedPaths()
     If paths.Count = 0 Then
-        MsgBox "Select Name/Path cells or rows on Photos.", vbExclamation
+        MsgBox "Could not resolve a file path from the selection." & vbCrLf & _
+               "Select the Name or Path cell (or the whole row) for a Photos entry that has a Path.", vbExclamation
         Exit Sub
     End If
 
-    EnsureCaptionsSheet
-    Set ws = Worksheets(CAPTIONS_SHEET)
-    EnsureColumns ws, CaptionFieldList()
+    On Error GoTo ensureFail
+    EnsureCaptionColumn photosWs
+    On Error GoTo 0
 
     okCount = 0
     errCount = 0
+    missCount = 0
     embedFail = 0
-    Application.StatusBar = "Captioning…"
+    Application.StatusBar = "Captioning " & paths.Count & " photo(s)... (Ctrl+Shift+Y)"
 
     For Each p In paths
         path = NormalizePath(CStr(p))
         fileName = BaseName(path)
+        destRow = FindPhotosRowForPath(photosWs, path)
+        If destRow = 0 Then
+            missCount = missCount + 1
+            GoTo nextPath
+        End If
 #If Mac Then
         On Error GoTo appleScriptMissing
         raw = AppleScriptTask("StriderCaption.scpt", "captionPhoto", path & vbTab & DEFAULT_CAPTION_PROVIDER)
@@ -1153,9 +1265,6 @@ Public Sub CaptionSelectedPhotos()
             GoTo nextPath
         End If
 
-        provider = parts(1)
-        model = parts(2)
-        words = parts(3)
         caption = parts(4)
         If UBound(parts) > 4 Then
             For i = 5 To UBound(parts)
@@ -1163,49 +1272,317 @@ Public Sub CaptionSelectedPhotos()
             Next i
         End If
 
-        destRow = FindRowByFileName(ws, fileName)
-        If destRow = 0 Then destRow = NextDataRow(ws)
-        SetCellByHeader ws, destRow, "Name", fileName
-        SetCellByHeader ws, destRow, "Path", path
-        SetCellByHeader ws, destRow, "Provider", provider
-        SetCellByHeader ws, destRow, "Model", model
-        SetCellByHeader ws, destRow, "Words", words
-        SetCellByHeader ws, destRow, "Generated", Now
-        FormatCatalogField ws, destRow, "Generated", "m/d/yy h:mm AM/PM"
-        SetCellByHeader ws, destRow, "Caption", caption
-        AddNameHyperlink ws, destRow, path, fileName
-
-#If Mac Then
-        On Error GoTo embedMissing
-        embedRaw = AppleScriptTask("StriderFinderMeta.scpt", "writeCaption", path & vbTab & caption)
-        On Error GoTo 0
-        embedParts = Split(embedRaw, vbTab)
-        If UBound(embedParts) < 0 Or embedParts(0) = "ERROR" Then
+        If Not WriteCaptionToPhotosRow(photosWs, destRow, path, caption) Then
             embedFail = embedFail + 1
         End If
-#End If
         okCount = okCount + 1
 nextPath:
     Next p
 
     Application.StatusBar = False
-    ws.Activate
-    MsgBox "Captions written: " & okCount & "  ·  failed: " & errCount & _
-           "  ·  file embed failed: " & embedFail & vbCrLf & _
-           "Embedded as MWG:Description CAPTION: (NOTE: preserved)." & vbCrLf & _
-           "Provider: " & DEFAULT_CAPTION_PROVIDER & " (edit DEFAULT_CAPTION_PROVIDER in CatalogMacros for Claude).", _
+    photosWs.Activate
+    MsgBox "Captions written: " & okCount & "  /  failed: " & errCount & _
+           "  /  no Photos row: " & missCount & _
+           "  /  file embed failed: " & embedFail & vbCrLf & _
+           "Stored in Photos Caption column; embedded as MWG:Description CAPTION: (NOTE: preserved)." & vbCrLf & _
+           "Click a Caption cell to edit. Provider: " & DEFAULT_CAPTION_PROVIDER & "." & vbCrLf & vbCrLf & _
+           "Any time: Photos -> select Name/row(s) -> Ctrl+Shift+Y.", _
            vbInformation
     Exit Sub
-
-embedMissing:
-    embedFail = embedFail + 1
-    Resume nextPath
 
 appleScriptMissing:
     Application.StatusBar = False
     MsgBox "Could not run StriderCaption.scpt." & vbCrLf & _
            "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+    Exit Sub
+
+ensureFail:
+    Application.StatusBar = False
+    MsgBox "Could not prepare the Photos Caption column:" & vbCrLf & Err.Description & vbCrLf & vbCrLf & _
+           "If the workbook is protected, run macro ReapplyUiOnlyProtection, then try again.", vbCritical
 End Sub
+
+' Photos / Videos SelectionChange: Mac dialog to edit Caption (UserForms unavailable on Mac Excel).
+Public Sub HandleCatalogCaptionClick(ByVal Sh As Object, ByVal Target As Range)
+    Dim capCol As Long
+    Dim caption As String
+    Dim edited As String
+    Dim cancelled As Boolean
+    Dim eventsWas As Boolean
+
+    On Error GoTo safeExit
+    If gCaptionEditorOpen Then GoTo safeExit
+    If Sh Is Nothing Then GoTo safeExit
+    If Target Is Nothing Then GoTo safeExit
+    If Target.Rows.Count <> 1 Or Target.Columns.Count <> 1 Then GoTo safeExit
+    If StrComp(Sh.Name, PHOTOS_SHEET, vbTextCompare) <> 0 And _
+       StrComp(Sh.Name, VIDEOS_SHEET, vbTextCompare) <> 0 Then GoTo safeExit
+    If Target.Row <= SheetHeaderRow(Sh) Then GoTo safeExit
+
+    ' Resolve Caption column first — do not mutate the sheet until we know this is a Caption click.
+    capCol = HeaderCol(Sh, "Caption")
+    If capCol = 0 Then
+        eventsWas = Application.EnableEvents
+        Application.EnableEvents = False
+        EnsureCaptionColumn Sh
+        Application.EnableEvents = eventsWas
+        capCol = HeaderCol(Sh, "Caption")
+    End If
+    If capCol = 0 Or Target.Column <> capCol Then GoTo safeExit
+
+    caption = ""
+    On Error Resume Next
+    caption = CStr(Sh.Cells(Target.Row, capCol).Value2)
+    If Len(caption) = 0 Then caption = CStr(Sh.Cells(Target.Row, capCol).Text)
+    On Error GoTo safeExit
+
+    gCaptionEditorOpen = True
+    eventsWas = Application.EnableEvents
+    Application.EnableEvents = False
+    edited = PromptEditCaption(caption, cancelled)
+    Application.EnableEvents = eventsWas
+    If Not cancelled Then
+        CommitCaptionEdit Sh.Name, Target.Row, edited
+    End If
+safeExit:
+    gCaptionEditorOpen = False
+    On Error Resume Next
+    Application.EnableEvents = True
+    On Error GoTo 0
+End Sub
+
+' Mac AppleScript dialog (Save/Cancel). Returns edited text; cancelled=True if Cancel.
+Private Function PromptEditCaption(ByVal currentText As String, ByRef cancelled As Boolean) As String
+    Dim raw As String
+    Dim parts() As String
+    Dim i As Long
+    Dim out As String
+
+    cancelled = True
+    PromptEditCaption = currentText
+#If Mac Then
+    On Error GoTo promptFail
+    raw = AppleScriptTask("StriderCaption.scpt", "editCaption", currentText)
+    On Error GoTo 0
+    If Len(raw) = 0 Then
+        MsgBox "Caption editor returned no response." & vbCrLf & _
+               "Run scripts/install_mac_helpers.sh, restart Excel, then try again." & vbCrLf & _
+               "Or run macro FixEnableEvents.", vbExclamation
+        Exit Function
+    End If
+    parts = Split(raw, vbTab)
+    If UBound(parts) < 0 Then Exit Function
+    If StrComp(parts(0), "CANCEL", vbTextCompare) = 0 Then Exit Function
+    If StrComp(parts(0), "ERROR", vbTextCompare) = 0 Then
+        If UBound(parts) >= 1 Then
+            MsgBox "Could not open caption editor:" & vbCrLf & parts(1) & vbCrLf & vbCrLf & _
+                   "Run scripts/install_mac_helpers.sh, then restart Excel.", vbExclamation
+        End If
+        Exit Function
+    End If
+    If StrComp(parts(0), "OK", vbTextCompare) <> 0 Then Exit Function
+    out = ""
+    If UBound(parts) >= 1 Then out = parts(1)
+    If UBound(parts) > 1 Then
+        For i = 2 To UBound(parts)
+            out = out & vbTab & parts(i)
+        Next i
+    End If
+    cancelled = False
+    PromptEditCaption = out
+    Exit Function
+promptFail:
+    MsgBox "Could not run StriderCaption.scpt (editCaption)." & vbCrLf & _
+           "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+#Else
+    MsgBox "Caption editing is implemented for Mac Excel.", vbInformation
+#End If
+End Function
+
+' Save Caption cell + re-embed CAPTION: in the file.
+Public Sub CommitCaptionEdit(ByVal sheetName As String, ByVal rowNum As Long, ByVal captionText As String)
+    Dim ws As Worksheet
+    Dim path As String
+    Dim caption As String
+
+    On Error GoTo failCommit
+    Set ws = Worksheets(sheetName)
+    EnsureCaptionColumn ws
+    caption = Trim$(captionText)
+    path = NormalizePath(PathFromCatalogRow(ws, rowNum))
+    SetCellByHeader ws, rowNum, "Caption", caption
+    FormatCaptionCell ws, rowNum
+    If Len(path) > 0 Then
+        If Not EmbedCaptionInFile(path, caption) Then
+            MsgBox "Caption saved in the catalog, but file embed failed for:" & vbCrLf & path, vbExclamation
+        End If
+    End If
+    Exit Sub
+failCommit:
+    MsgBox "Could not save caption:" & vbCrLf & Err.Description, vbCritical
+End Sub
+
+' One-shot: copy old Captions-sheet rows into Photos Caption (by Name/Path).
+Public Sub MigrateCaptionsSheetToPhotos()
+    Dim capWs As Worksheet
+    Dim photosWs As Worksheet
+    Dim hdr As Long
+    Dim lastRow As Long
+    Dim r As Long
+    Dim destRow As Long
+    Dim path As String
+    Dim fileName As String
+    Dim caption As String
+    Dim okCount As Long
+    Dim missCount As Long
+    Dim nameCol As Long
+    Dim pathCol As Long
+    Dim captionCol As Long
+
+    On Error Resume Next
+    Set capWs = Worksheets(CAPTIONS_SHEET)
+    On Error GoTo 0
+    If capWs Is Nothing Then
+        MsgBox "No Captions sheet found. Nothing to migrate.", vbInformation
+        Exit Sub
+    End If
+
+    Set photosWs = Worksheets(PHOTOS_SHEET)
+    EnsureCaptionColumn photosWs
+    hdr = CAPTIONS_HEADER_ROW
+    nameCol = HeaderCol(capWs, "Name")
+    pathCol = HeaderCol(capWs, "Path")
+    captionCol = HeaderCol(capWs, "Caption")
+    If captionCol = 0 Then
+        MsgBox "Captions sheet has no Caption column.", vbExclamation
+        Exit Sub
+    End If
+
+    lastRow = CatalogLastDataRow(capWs)
+    okCount = 0
+    missCount = 0
+    For r = hdr + 1 To lastRow
+        caption = Trim$(CStr(capWs.Cells(r, captionCol).Value))
+        If Len(caption) = 0 Then GoTo nextCapRow
+        path = ""
+        fileName = ""
+        If pathCol > 0 Then path = NormalizePath(Trim$(CStr(capWs.Cells(r, pathCol).Value)))
+        If nameCol > 0 Then fileName = Trim$(CStr(capWs.Cells(r, nameCol).Value))
+        destRow = 0
+        If Len(path) > 0 Then destRow = FindPhotosRowForPath(photosWs, path)
+        If destRow = 0 And Len(fileName) > 0 Then destRow = FindRowByFileName(photosWs, fileName)
+        If destRow = 0 Then
+            missCount = missCount + 1
+            GoTo nextCapRow
+        End If
+        SetCellByHeader photosWs, destRow, "Caption", caption
+        FormatCaptionCell photosWs, destRow
+        okCount = okCount + 1
+nextCapRow:
+    Next r
+
+    MsgBox "Migrated " & okCount & " caption(s) into Photos." & vbCrLf & _
+           "No matching Photos row: " & missCount & vbCrLf & vbCrLf & _
+           "You can delete the Captions sheet when satisfied.", vbInformation
+End Sub
+
+Private Sub EnsureCaptionColumn(ByVal ws As Worksheet)
+    Dim capCol As Long
+    Dim hdr As Long
+    EnsureColumns ws, Array("Caption")
+    capCol = HeaderCol(ws, "Caption")
+    If capCol > 0 Then
+        hdr = SheetHeaderRow(ws)
+        On Error Resume Next
+        ws.Columns(capCol).WrapText = True
+        ws.Columns(capCol).ColumnWidth = 48
+        ' Keep Caption selectable under EnableSelection=xlUnlockedCells (do not re-lock whole sheet here).
+        ws.Cells(hdr, capCol).Locked = True
+        ws.Range(ws.Cells(hdr + 1, capCol), ws.Cells(500, capCol)).Locked = False
+        On Error GoTo 0
+    End If
+End Sub
+
+' Photos/Videos: header locked, data unlocked (Name/Caption/etc. must be selectable).
+Private Sub UnlockCatalogListDataArea(ByVal ws As Worksheet)
+    Dim hdr As Long
+    Dim lastCol As Long
+    If ws Is Nothing Then Exit Sub
+    If StrComp(ws.Name, PHOTOS_SHEET, vbTextCompare) <> 0 And _
+       StrComp(ws.Name, VIDEOS_SHEET, vbTextCompare) <> 0 Then Exit Sub
+    hdr = SheetHeaderRow(ws)
+    lastCol = HeaderLastCol(ws)
+    If lastCol < 1 Then lastCol = 1
+    If lastCol < 40 Then lastCol = 40
+    On Error Resume Next
+    ws.Range(ws.Cells(hdr, 1), ws.Cells(hdr, lastCol)).Locked = True
+    ws.Range(ws.Cells(hdr + 1, 1), ws.Cells(500, lastCol)).Locked = False
+    On Error GoTo 0
+End Sub
+
+Private Function FindPhotosRowForPath(ByVal ws As Worksheet, ByVal path As String) As Long
+    Dim pathCol As Long
+    Dim r As Long
+    Dim lastRow As Long
+    Dim cellPath As String
+    Dim want As String
+
+    FindPhotosRowForPath = 0
+    want = NormalizePath(path)
+    If Len(want) = 0 Then Exit Function
+    pathCol = HeaderCol(ws, "Path")
+    If pathCol = 0 Then
+        FindPhotosRowForPath = FindRowByFileName(ws, BaseName(want))
+        Exit Function
+    End If
+    lastRow = CatalogLastDataRow(ws)
+    For r = SheetHeaderRow(ws) + 1 To lastRow
+        cellPath = NormalizePath(Trim$(CStr(ws.Cells(r, pathCol).Value)))
+        If StrComp(cellPath, want, vbTextCompare) = 0 Then
+            FindPhotosRowForPath = r
+            Exit Function
+        End If
+    Next r
+    FindPhotosRowForPath = FindRowByFileName(ws, BaseName(want))
+End Function
+
+' Writes Caption cell + embeds; returns True if embed OK (or no Mac embed attempted).
+Private Function WriteCaptionToPhotosRow(ByVal ws As Worksheet, ByVal destRow As Long, _
+                                         ByVal path As String, ByVal caption As String) As Boolean
+    SetCellByHeader ws, destRow, "Caption", caption
+    FormatCaptionCell ws, destRow
+    WriteCaptionToPhotosRow = EmbedCaptionInFile(path, caption)
+End Function
+
+Private Sub FormatCaptionCell(ByVal ws As Worksheet, ByVal rowNum As Long)
+    Dim capCol As Long
+    capCol = HeaderCol(ws, "Caption")
+    If capCol = 0 Then Exit Sub
+    On Error Resume Next
+    ws.Cells(rowNum, capCol).WrapText = True
+    ws.Cells(rowNum, capCol).Locked = False
+    On Error GoTo 0
+End Sub
+
+Private Function EmbedCaptionInFile(ByVal path As String, ByVal caption As String) As Boolean
+    Dim embedRaw As String
+    Dim embedParts() As String
+
+    EmbedCaptionInFile = True
+    If Len(NormalizePath(path)) = 0 Then Exit Function
+#If Mac Then
+    On Error GoTo embedFail
+    embedRaw = AppleScriptTask("StriderFinderMeta.scpt", "writeCaption", path & vbTab & caption)
+    On Error GoTo 0
+    embedParts = Split(embedRaw, vbTab)
+    If UBound(embedParts) < 0 Or embedParts(0) = "ERROR" Then
+        EmbedCaptionInFile = False
+    End If
+    Exit Function
+embedFail:
+    EmbedCaptionInFile = False
+#End If
+End Function
 
 Private Function CaptionFieldList() As Variant
     CaptionFieldList = Array( _
@@ -1217,14 +1594,34 @@ Private Sub EnsureCaptionsSheet()
     Dim fields As Variant
     Dim i As Long
     Dim hdr As Long
+    Dim structureOn As Boolean
+    Dim created As Boolean
 
     On Error Resume Next
     Set ws = Worksheets(CAPTIONS_SHEET)
     On Error GoTo 0
+
+    created = False
     If ws Is Nothing Then
+        ' Workbook structure lock blocks adding sheets — lift briefly if needed.
+        structureOn = ThisWorkbook.ProtectStructure
+        If structureOn Then UnprotectWorkbookStructure
+        On Error Resume Next
         Set ws = Worksheets.Add(After:=Worksheets(Worksheets.Count))
-        ws.Name = CAPTIONS_SHEET
+        If Not ws Is Nothing Then
+            ws.Name = CAPTIONS_SHEET
+            created = True
+        End If
+        On Error GoTo 0
+        If ws Is Nothing Then
+            If structureOn Then ProtectWorkbookStructure
+            Err.Raise 1004, "EnsureCaptionsSheet", _
+                "Could not create Captions sheet (workbook structure may still be protected)."
+        End If
     End If
+
+    ' Sheet protection without UserInterfaceOnly blocks VBA writes after reopen.
+    UnprotectSheet ws
 
     hdr = CAPTIONS_HEADER_ROW
     ws.Cells(1, 1).Value = "Captioning prompt"
@@ -1242,7 +1639,7 @@ Private Sub EnsureCaptionsSheet()
     ws.Rows(2).RowHeight = 150
     On Error GoTo 0
 
-    ws.Cells(3, 1).Value = "Select Photos rows → Ctrl+Shift+Y (CaptionSelectedPhotos). Default provider: Gemini Flash (google). Change DEFAULT_CAPTION_PROVIDER in CatalogMacros for Claude."
+    ws.Cells(3, 1).Value = "Any time on Photos: select Name/Path cell(s) or row(s) -> Ctrl+Shift+Y (CaptionSelectedPhotos). Re-run to refresh a caption. Default provider: Gemini Flash (google)."
     ws.Cells(3, 1).Font.Name = "Times New Roman"
     ws.Cells(3, 1).Font.Size = 12
     ws.Cells(3, 1).Font.Italic = True
@@ -1257,14 +1654,102 @@ Private Sub EnsureCaptionsSheet()
         ws.Cells(hdr, i - LBound(fields) + 1).Font.Bold = True
     Next i
     EnsureColumns ws, CaptionFieldList()
+    UnlockCaptionsDataArea ws
+    ProtectCaptionsSheet ws
+    If structureOn Or created Then ProtectWorkbookStructure
+End Sub
+
+Private Sub UnlockCaptionsDataArea(ByVal ws As Worksheet)
+    Dim hdr As Long
+    On Error Resume Next
+    hdr = CAPTIONS_HEADER_ROW
+    UnprotectSheet ws
+    ws.Rows(hdr).Locked = True
+    ws.Range(ws.Cells(hdr + 1, 1), ws.Cells(500, 20)).Locked = False
+    On Error GoTo 0
+End Sub
+
+Private Sub UnprotectWorkbookStructure()
+    On Error Resume Next
+    ThisWorkbook.Unprotect Password:=""
+    On Error GoTo 0
+End Sub
+
+Private Sub ProtectWorkbookStructure()
+    On Error Resume Next
+    ThisWorkbook.Protect Password:="", Structure:=True, Windows:=False
+    On Error GoTo 0
+End Sub
+
+Private Sub UnprotectSheet(ByVal ws As Worksheet)
+    On Error Resume Next
+    ws.Unprotect Password:=""
+    On Error GoTo 0
+End Sub
+
+Private Sub ProtectCaptionsSheet(ByVal ws As Worksheet)
+    On Error Resume Next
+    ws.Protect Password:="", DrawingObjects:=True, Contents:=True, Scenarios:=True, _
+        UserInterfaceOnly:=True, _
+        AllowFormattingCells:=True, AllowFormattingColumns:=False, AllowFormattingRows:=False, _
+        AllowInsertingColumns:=True, AllowInsertingRows:=True, _
+        AllowDeletingColumns:=False, AllowDeletingRows:=True, _
+        AllowSorting:=True, AllowFiltering:=True
+    ws.EnableSelection = xlUnlockedCells
+    On Error GoTo 0
+End Sub
+
+' Re-apply protection so VBA can write (UserInterfaceOnly is session-only).
+Public Sub ReapplyUiOnlyProtection()
+    Dim ws As Worksheet
+    Dim nm As String
+
+    On Error Resume Next
+    UnprotectWorkbookStructure
+    For Each ws In ThisWorkbook.Worksheets
+        nm = ws.Name
+        UnprotectSheet ws
+        Select Case nm
+            Case ENTRY_SHEET, VIDEO_ENTRY_SHEET
+                ws.Protect Password:="", DrawingObjects:=True, Contents:=True, Scenarios:=True, _
+                    UserInterfaceOnly:=True, _
+                    AllowFormattingCells:=True, AllowFormattingColumns:=False, AllowFormattingRows:=False, _
+                    AllowInsertingColumns:=True, AllowInsertingRows:=True, _
+                    AllowDeletingColumns:=False, AllowDeletingRows:=False, _
+                    AllowSorting:=True, AllowFiltering:=True
+                ws.EnableSelection = xlUnlockedCells
+            Case PHOTOS_SHEET, VIDEOS_SHEET, LISTS_SHEET
+                If StrComp(nm, PHOTOS_SHEET, vbTextCompare) = 0 Or _
+                   StrComp(nm, VIDEOS_SHEET, vbTextCompare) = 0 Then
+                    StripNameHyperlinksOnSheet ws
+                    UnlockCatalogListDataArea ws
+                End If
+                ws.Protect Password:="", DrawingObjects:=True, Contents:=True, Scenarios:=True, _
+                    UserInterfaceOnly:=True, _
+                    AllowFormattingCells:=True, AllowFormattingColumns:=False, AllowFormattingRows:=False, _
+                    AllowInsertingColumns:=True, AllowInsertingRows:=True, _
+                    AllowDeletingColumns:=False, AllowDeletingRows:=True, _
+                    AllowSorting:=True, AllowFiltering:=True
+                ws.EnableSelection = xlUnlockedCells
+            Case CAPTIONS_SHEET
+                ProtectCaptionsSheet ws
+            Case Else
+                ws.Protect Password:="", DrawingObjects:=True, Contents:=True, Scenarios:=True, _
+                    UserInterfaceOnly:=True, _
+                    AllowFormattingCells:=False, AllowFormattingColumns:=False, AllowFormattingRows:=False
+                ws.EnableSelection = xlNoRestrictions
+        End Select
+    Next ws
+    ProtectWorkbookStructure
+    On Error GoTo 0
 End Sub
 
 Private Function CaptionPromptText() As String
     CaptionPromptText = _
-        "You are writing a single National Geographic magazine photo caption." & vbLf & vbLf & _
+        "You are writing a single Scientific American–style photo caption." & vbLf & vbLf & _
         "Requirements:" & vbLf & _
         "- About 60 words (50–70 is fine). Prefer one compact paragraph." & vbLf & _
-        "- Evocative, precise, scientifically curious — not flowery marketing copy." & vbLf & _
+        "- Use plain, straightforward descriptive prose — clear and factual, as in a Scientific American article. Avoid lyrical, dramatic, or flowery wording." & vbLf & _
         "- Ground the caption in what is actually visible in the image (organisms, leaf, ripples, reflections, light on water). Metadata may name species/place/behavior; use it only when it fits what you see." & vbLf & _
         "- Photographer notes are trusted field observations — incorporate them when they fit the image (do not quote them verbatim unless natural)." & vbLf & _
         "- Note any patterns of color, shape, or ripples." & vbLf & _
@@ -1429,12 +1914,14 @@ Private Sub SetDescriptionCaptionPreview(ByVal sheetName As String, ByVal captio
 End Sub
 
 ' Camera / identity fields — not written as Keywords.
+' HaveRaw? / VertPix / HorPix ARE written (rawYes|rawNo and VertPix:/HorPix:).
 Private Function IsWritebackField(ByVal label As String) As Boolean
     Select Case label
         Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
              "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
              "Focus Distance", "GPS", "Serial Number", _
-             "Duration", "FrameRate", "Resolution"
+             "Duration", "FrameRate", "Resolution", _
+             "Caption"
             IsWritebackField = False
         Case Else
             IsWritebackField = True
@@ -1452,6 +1939,8 @@ Private Function KeywordKeyForLabel(ByVal label As String) As String
             KeywordKeyForLabel = "CausticAppearance"
         Case "notes", "Note"
             KeywordKeyForLabel = "notes"
+        Case "HaveRaw?"
+            KeywordKeyForLabel = "HaveRaw"
         Case Else
             KeywordKeyForLabel = PascalCaseKey(label)
     End Select
@@ -1481,7 +1970,8 @@ End Function
 Private Function IsFormFieldLabel(ByVal label As String) As Boolean
     If Len(label) = 0 Then Exit Function
     Select Case label
-        Case "Name", "Path", "Date", "Time", "Type", "FileSize", _
+        Case "Name", "Path", "HaveRaw?", "Date", "Time", "Type", "FileSize", _
+             "VertPix", "HorPix", _
              "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
              "Focus Distance", "GPS", "Serial Number", _
              "Duration", "FrameRate", "Resolution", _
@@ -1849,6 +2339,7 @@ Private Sub SetCellByHeader(ws As Worksheet, ByVal rowNum As Long, headerName As
     End If
 End Sub
 
+' Writes Name as plain text (no hyperlink). Open media via double-click or Ctrl+Shift+O.
 Private Sub AddNameHyperlink(ws As Worksheet, ByVal rowNum As Long, path As String, fileName As String)
     Dim col As Long
     Dim target As Range
@@ -1856,8 +2347,100 @@ Private Sub AddNameHyperlink(ws As Worksheet, ByVal rowNum As Long, path As Stri
     col = HeaderCol(ws, "Name")
     If col = 0 Then Exit Sub
     Set target = ws.Cells(rowNum, col)
+    On Error Resume Next
     If target.Hyperlinks.Count > 0 Then target.Hyperlinks.Delete
-    target.Hyperlinks.Add Anchor:=target, Address:=path, TextToDisplay:=fileName
+    target.Value = fileName
+    target.Font.ColorIndex = xlColorIndexAutomatic
+    target.Font.Underline = xlUnderlineStyleNone
+    target.Locked = False
+    On Error GoTo 0
+End Sub
+
+' Photos / Videos BeforeDoubleClick: Name → Preview; Caption → edit dialog (Cancel in-cell edit).
+Public Sub HandleCatalogNameDoubleClick(ByVal Sh As Object, ByVal Target As Range, ByRef Cancel As Boolean)
+    Dim nameCol As Long
+    Dim capCol As Long
+    Dim path As String
+    Dim result As String
+
+    On Error GoTo safeExit
+    If Sh Is Nothing Then GoTo safeExit
+    If Target Is Nothing Then GoTo safeExit
+    If Target.Rows.Count <> 1 Or Target.Columns.Count <> 1 Then GoTo safeExit
+    If StrComp(Sh.Name, PHOTOS_SHEET, vbTextCompare) <> 0 And _
+       StrComp(Sh.Name, VIDEOS_SHEET, vbTextCompare) <> 0 Then GoTo safeExit
+    If Target.Row <= SheetHeaderRow(Sh) Then GoTo safeExit
+
+    capCol = HeaderCol(Sh, "Caption")
+    If capCol > 0 And Target.Column = capCol Then
+        Cancel = True
+        HandleCatalogCaptionClick Sh, Target
+        Exit Sub
+    End If
+
+    nameCol = HeaderCol(Sh, "Name")
+    If nameCol = 0 Or Target.Column <> nameCol Then GoTo safeExit
+
+    path = NormalizePath(PathFromCatalogRow(Sh, Target.Row))
+    If Len(path) = 0 Then GoTo safeExit
+
+    Cancel = True
+#If Mac Then
+    On Error GoTo appleScriptMissing
+    result = AppleScriptTask("StriderOpenPreview.scpt", "openInPreview", path)
+    On Error GoTo 0
+    If Len(result) > 0 Then MsgBox result, vbExclamation
+#Else
+    ThisWorkbook.FollowHyperlink path
+#End If
+    Exit Sub
+
+appleScriptMissing:
+    MsgBox "Could not run StriderOpenPreview.scpt." & vbCrLf & _
+           "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+safeExit:
+End Sub
+
+' One-shot / bootstrap: remove Name-column hyperlinks so single-click no longer opens files.
+Public Sub StripCatalogNameHyperlinks()
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = Worksheets(PHOTOS_SHEET)
+    UnprotectSheet ws
+    StripNameHyperlinksOnSheet ws
+    Set ws = Worksheets(VIDEOS_SHEET)
+    UnprotectSheet ws
+    StripNameHyperlinksOnSheet ws
+    On Error GoTo 0
+End Sub
+
+Private Sub StripNameHyperlinksOnSheet(ByVal ws As Worksheet)
+    Dim nameCol As Long
+    Dim hdr As Long
+    Dim lastRow As Long
+    Dim r As Long
+    Dim cell As Range
+    Dim display As String
+
+    If ws Is Nothing Then Exit Sub
+    nameCol = HeaderCol(ws, "Name")
+    If nameCol = 0 Then Exit Sub
+    hdr = SheetHeaderRow(ws)
+    lastRow = CatalogLastDataRow(ws)
+    On Error Resume Next
+    For r = hdr + 1 To lastRow
+        Set cell = ws.Cells(r, nameCol)
+        If cell.Hyperlinks.Count > 0 Then
+            display = cell.Hyperlinks(1).TextToDisplay
+            If Len(Trim$(display)) = 0 Then display = CStr(cell.Value)
+            cell.Hyperlinks.Delete
+            cell.Value = display
+            cell.Font.ColorIndex = xlColorIndexAutomatic
+            cell.Font.Underline = xlUnderlineStyleNone
+        End If
+        cell.Locked = False
+    Next r
+    On Error GoTo 0
 End Sub
 
 Private Function CollectSelectedPaths() As Collection

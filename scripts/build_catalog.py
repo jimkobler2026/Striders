@@ -14,6 +14,7 @@ OUT = ROOT / "catalog" / "build" / "Strider_Media_Catalog.xlsx"
 PHOTO_HEADERS = [
     "Name",
     "Path",
+    "HaveRaw?",
     "Date",
     "Time",
     "Sequence",
@@ -25,6 +26,8 @@ PHOTO_HEADERS = [
     "Locale",
     "Type",
     "FileSize",
+    "VertPix",
+    "HorPix",
     "Send to UK",
     "View",
     "Camera",
@@ -41,6 +44,7 @@ PHOTO_HEADERS = [
     "Caustic appearance",
     "Filters",
     "notes",
+    "Caption",
 ]
 
 VIDEO_HEADERS = [
@@ -68,6 +72,7 @@ VIDEO_HEADERS = [
     "Caustic appearance",
     "Filters",
     "notes",
+    "Caption",
 ]
 
 # Captured from live Entry sheet tag options (2026-11-07).
@@ -103,16 +108,20 @@ LISTS = {
     "Caustic appearance": ["weak", "moderate", "great", "spectacular"],
     "Filters": ["none", "polarizing"],
     "Panopticon portfolio": ["nope", "maybe", "good", "great"],
+    "HaveRaw?": ["Y", "N"],
 }
 
 # Photo Entry: auto first, then tags
 ENTRY_FIELDS = [
     "Name",
     "Path",
+    "HaveRaw?",
     "Date",
     "Time",
     "Type",
     "FileSize",
+    "VertPix",
+    "HorPix",
     "Camera",
     "Mode",
     "Lens",
@@ -137,7 +146,7 @@ ENTRY_FIELDS = [
     "Filters",
     "notes",
 ]
-ENTRY_AUTO_COUNT = 18
+ENTRY_AUTO_COUNT = 21
 
 # Video Entry: auto first, then tags
 VIDEO_ENTRY_FIELDS = [
@@ -320,6 +329,12 @@ def add_tag_write_preview(ws, field_rows: dict[str, int], start_row: int = 32):
         ("Keyword Sequence:", f'=IF({bref("Sequence")}="","(none)","Sequence:"&{bref("Sequence")})'),
         ("Keyword SequenceID:", f'=IF({bref("SequenceID")}="","(none)","SequenceID:"&{bref("SequenceID")})'),
         ("Keyword SequencePos:", f'=IF({bref("SequencePos")}="","(none)","SequencePos:"&{bref("SequencePos")})'),
+        (
+            "Keyword rawYes/rawNo:",
+            f'=IF({bref("HaveRaw?")}="","(none)",IF(OR(UPPER({bref("HaveRaw?")})="Y",UPPER({bref("HaveRaw?")})="YES"),"rawYes","rawNo"))',
+        ),
+        ("Keyword VertPix:", f'=IF({bref("VertPix")}="","(none)","VertPix:"&{bref("VertPix")})'),
+        ("Keyword HorPix:", f'=IF({bref("HorPix")}="","(none)","HorPix:"&{bref("HorPix")})'),
         ("Location → Locale", f'=IF({bref("Locale")}="","(none)",{bref("Locale")})'),
         (
             "Description → NOTE:",

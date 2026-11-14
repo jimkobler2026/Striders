@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a National Geographic–style caption (~60 words) for a photo.
+"""Generate a Scientific American–style caption (~60 words) for a photo.
 
 Uses vision-capable LLMs plus helpful file metadata (EXIF / Keywords).
 Does not dump every technical setting — metadata is context for the prose.
@@ -43,8 +43,9 @@ def load_prompt() -> str:
         if text:
             return text
     return (
-        "You are writing a single National Geographic magazine photo caption. "
-        "About 60 words. Output ONLY the caption text."
+        "You are writing a single Scientific American–style photo caption. "
+        "Use plain, straightforward descriptive prose. About 60 words. "
+        "Output ONLY the caption text."
     )
 
 
