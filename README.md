@@ -48,7 +48,7 @@ Those helpers run exiftool (and, for captions, a small shell bridge into `script
 3. Optionally tag continuous bursts (`tag_sequences.py --recursive --write`; default minimum **4** frames).
 4. Open a **copy** of the blank `.xlsm` (your working catalog).
 5. Cull in Preview: **I** load → tag → **W** append → **D** trash reject (photos). Videos: **U** / **E** → tag → **R**.
-6. **Sequences:** load/tag the **1/n** frame on Entry, then **Ctrl+Shift+S** (`AppendPhotoSequence`) to import every frame with those tags (each keeps its own SequencePos).
+6. **Sequences:** load/tag the **1/n** frame on Entry, then **Ctrl+Shift+S** (`AppendPhotoSequence`) to import every frame with those tags (each keeps its own SequencePos). For large mixed culls: **Ctrl+Shift+B** to import selected files (metadata only), tag one related row, select Names, **Ctrl+Shift+T** to copy tags.
 7. Later: filter on Photos/Videos; **O** / **J** to reopen or reveal; **Y** to caption keepers.
 
 ---
@@ -106,6 +106,18 @@ Goal: tag the representative frame once, then append every sibling with the same
 6. Continue culling; use **W** for singles, **S** whenever Entry is sitting on a tagged sequence member.
 
 Prerequisites: helpers installed (`./scripts/install_mac_helpers.sh`), Excel restarted, current `CatalogMacros.bas` imported so **S** is bound.
+
+### 3. Batch import then tag copy (large culls)
+
+For hundreds of keepers that are related but not necessarily a full SequenceID expand:
+
+1. **Ctrl+Shift+B** (`BatchImportSelectedPhotos`): multi-select stills in **Finder** (preferred for large sets) or open them in **Preview**. Each file becomes a Photos row with camera EXIF / Sequence* / HaveRaw? / VertPix / HorPix only — **no user tags**. Skips RAW; JPEG+RAW pairs use HaveRaw?=Y on the JPEG. Existing rows refresh metadata and keep existing tags.
+2. Tag the **first** related file (Load → click-pick → **W**, or edit that Photos row’s tag cells).
+3. On **Photos**, select the **Name** cells for the related group (include the tagged seed row; active cell’s row is preferred as seed if it has tags).
+4. **Ctrl+Shift+T** (`CopyTagsToSelectedPhotos`): copies user tags (Species, Locale, Rating, caustic fields, notes, …) onto the other selected rows and writes Keywords to each file. Does **not** overwrite Path/Date/camera/Sequence*/HaveRaw?/pixels/Caption.
+5. Repeat step 2–4 for the next related cluster.
+
+Use **S** when you want every frame of one SequenceID; use **B**+**T** when you selected exactly the files to catalog and will share tags afterward.
 
 ---
 
@@ -175,11 +187,15 @@ Control key, not ⌘. Bound by `Auto_Open` → `AssignMacroShortcuts` after `Cat
 | Ctrl+Shift+**Y** | `CaptionSelectedPhotos`         | Photos: select Name/row(s) → Caption column + embed |
 | Ctrl+Shift+**K** | `AddCatalogField`               | Prompt to add a new click-pick tag everywhere   |
 | Ctrl+Shift+**S** | `AppendPhotoSequence`           | Append all frames of Entry’s SequenceID (tags from 1/n) |
+| Ctrl+Shift+**B** | `BatchImportSelectedPhotos`     | Finder/Preview multi-select → Photos rows (metadata only) |
+| Ctrl+Shift+**T** | `CopyTagsToSelectedPhotos`      | Photos: copy user tags from seed row → selected Names + Keywords |
 
 
 If OnKey does nothing on your Excel build: **Tools → Customize Keyboard…** → Macros → assign the same keys.
 
 After **re-importing** `CatalogMacros.bas` while the workbook is already open, OnKey bindings are not refreshed automatically (`Auto_Open` only runs on open). Run macro **`AssignMacroShortcuts`** once, or close and reopen the `.xlsm`.
+
+Slow macros (**B**, **T**, **S**, **Y**) show progress in Excel’s **status bar** (bottom of the window) with a wait cursor — look there while a batch runs.
 
 ---
 
@@ -208,6 +224,8 @@ Import this module into the VBA project (remove any old **CatalogMacros** / **Ap
 | `MigrateCaptionsSheetToPhotos`                                   | One-shot import from legacy Captions sheet into Photos Caption                   |
 | `AddCatalogField`                                                | Add Lists column, Entry/VideoEntry rows, Photos/Videos columns, metadata preview |
 | `AppendPhotoSequence`                                            | Bulk-append every photo sharing Entry’s SequenceID; shared tags from Entry (use 1/n); per-frame EXIF + SequencePos |
+| `BatchImportSelectedPhotos`                                      | Finder/Preview multi-select → Photos metadata rows (no user tags)                                              |
+| `CopyTagsToSelectedPhotos`                                       | Copy user tags from seed Photos row → selected Names + Keyword write-back                                      |
 
 
 **Runtime field discovery**
@@ -365,6 +383,7 @@ API keys for captions: prefer sibling `../Virtual_Nexus/.env` (wired by `Strider
 | `catalog/macros/caption_prompt.txt`                  | Canonical caption prompt (keep in sync with VBA `CaptionPromptText` if both are edited) |
 | `scripts/*`                                          | Tools listed above                                                                      |
 | `HANDOFF.md`                                         | Agent/session handoff notes                                                             |
+| `SETUP_FOR_FRIENDS.txt`                              | Plain-language install + daily use for sharing with another Mac user                    |
 | `.env` (optional, gitignored)                        | Local API keys fallback                                                                 |
 
 
@@ -417,4 +436,34 @@ Prefer **Ctrl+Shift+K** inside Excel (updates Lists, Entry, VideoEntry, Photos, 
 - Do **not** casually run `setup_workbook.sh` — it can overwrite a working `.xlsm` (requires `--force`).
 - Deleting Photos/Videos **rows** only removes catalog entries, not files on disk (and does not clear embedded `CAPTION:` on the file).
 - Keep `catalog/build/Strider_Media_Catalog_blank.xlsm` updated when Entry layout or macros change.
+
+---
+
+## Sharing with another person
+
+You may give a friend a copy of this project. Prefer the **blank** workbook plus macros/scripts — not your filled working catalog (private Paths, notes, captions).
+
+**Good to share**
+
+- Whole repo zip, **or** at least:
+  - `catalog/build/Strider_Media_Catalog_blank.xlsm`
+  - `catalog/macros/` (`.bas`, sheet stubs, `.applescript`)
+  - `scripts/` (especially `install_mac_helpers.sh`)
+  - `README.md` and [`SETUP_FOR_FRIENDS.txt`](SETUP_FOR_FRIENDS.txt)
+
+**Do not share**
+
+- Your working `catalog/main catalog/Strider_Media_Catalog.xlsm` if it has personal data you want private
+- `.env` / API keys
+- Assumptions that their photos live under your `~/Pictures/…` paths
+
+**On their Mac (summary)**
+
+1. Install Excel + `exiftool` (`brew install exiftool`).
+2. `chmod +x scripts/*.sh` then `./scripts/install_mac_helpers.sh`; quit/reopen Excel.
+3. Duplicate the blank `.xlsm` → their working copy; enable macros.
+4. Confirm Entry/Photos/Videos/VideoEntry sheet stubs are pasted; run **`AssignMacroShortcuts`**.
+5. Smoke: **I**/**Q** → click-pick → **W**.
+
+Plain-language walkthrough for non-technical users: **[`SETUP_FOR_FRIENDS.txt`](SETUP_FOR_FRIENDS.txt)**.
 

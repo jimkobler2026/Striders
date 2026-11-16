@@ -458,6 +458,84 @@ on selectedPOSIXPath()
     end tell
 end selectedPOSIXPath
 
+-- Batch import: Finder selection first, else all open Preview docs with paths.
+-- Returns OK <NUL> path1 <NUL> path2 …  or ERROR <tab> message
+on listBatchImportPaths(dummy)
+    set paths to my selectedPOSIXPaths()
+    if (count of paths) is 0 then set paths to my previewPOSIXPaths()
+    if (count of paths) is 0 then
+        return "ERROR" & tab & "Select image file(s) in Finder, or open saved images in Preview."
+    end if
+    set AppleScript's text item delimiters to {character id 0}
+    set joined to paths as text
+    set AppleScript's text item delimiters to ""
+    return "OK" & (character id 0) & joined
+end listBatchImportPaths
+
+-- All Finder-selected files that look like catalog stills (skip RAW / folders).
+on selectedPOSIXPaths()
+    set out to {}
+    tell application "Finder"
+        set sel to selection as list
+        if (count of sel) is 0 then return out
+        repeat with f in sel
+            try
+                if class of f is folder then
+                    -- skip folders
+                else
+                    set p to POSIX path of (f as alias)
+                    if my isCatalogStillPath(p) then set end of out to p
+                end if
+            end try
+        end repeat
+    end tell
+    return out
+end selectedPOSIXPaths
+
+-- Paths of open Preview documents (saved files only).
+on previewPOSIXPaths()
+    set out to {}
+    try
+        tell application "Preview" to set docs to documents
+    on error
+        return out
+    end try
+    repeat with d in docs
+        try
+            tell application "Preview" to set pathTry to (get path of d)
+            if pathTry is missing value then
+                -- skip unsaved
+            else
+                set pathText to pathTry as text
+                if pathText starts with "/" then
+                    if my isCatalogStillPath(pathText) then set end of out to pathText
+                end if
+            end if
+        end try
+    end repeat
+    return out
+end previewPOSIXPaths
+
+on isCatalogStillPath(posixPath)
+    set p to posixPath as text
+    if p ends with "/" then return false
+    set AppleScript's text item delimiters to "."
+    set bits to text items of p
+    set AppleScript's text item delimiters to ""
+    if (count of bits) < 2 then return false
+    set ext to my lowerText(item -1 of bits)
+    if ext is in {"jpg", "jpeg", "heic", "tif", "tiff", "png"} then return true
+    return false
+end isCatalogStillPath
+
+on lowerText(s)
+    try
+        return do shell script "printf %s " & quoted form of (s as text) & " | tr '[:upper:]' '[:lower:]'"
+    on error
+        return s as text
+    end try
+end lowerText
+
 on exiftoolPath()
     set exif to "/usr/local/bin/exiftool"
     try

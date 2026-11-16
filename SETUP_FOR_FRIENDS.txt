@@ -1,0 +1,220 @@
+================================================================================
+STRIDER MEDIA CATALOG — BASIC SETUP & USE (for a friend on a Mac)
+================================================================================
+
+This spreadsheet helps you catalog photos (and videos): it reads camera info
+from each file, lets you pick tags by clicking, and can write those tags back
+into the image file.
+
+You need a Mac and Microsoft Excel that can run macros (.xlsm files).
+
+
+--------------------------------------------------------------------------------
+PART 1 — WHAT YOU NEED AND HOW TO INSTALL
+--------------------------------------------------------------------------------
+
+A. Get a copy of the project folder
+------------------------------------
+Someone should give you the "Striders" project folder (or a zip of it).
+
+Important pieces inside that folder:
+
+  catalog/build/Strider_Media_Catalog_blank.xlsm
+      → Empty starter spreadsheet (USE THIS — make a duplicate for your work)
+
+  catalog/macros/
+      → CatalogMacros.bas          (main Excel macros)
+      → EntrySheet_SelectionChange.txt
+      → VideoEntrySheet_SelectionChange.txt
+      → PhotosSheet_SelectionChange.txt
+      → VideosSheet_SelectionChange.txt
+      → *.applescript              (helper scripts Excel calls)
+
+  scripts/install_mac_helpers.sh
+      → Installs the helpers Excel needs
+
+  scripts/                          (optional Python tools; not required for
+                                     basic Load / tag / Append)
+
+  SETUP_FOR_FRIENDS.txt             (this file)
+  README.md                         (full technical guide)
+
+Do NOT use someone else’s filled “main catalog” workbook if it has their private
+photo paths and notes — start from the blank.
+
+
+B. One-time software on your Mac
+--------------------------------
+1. Microsoft Excel (Mac) — allow macros when asked.
+
+2. Install Homebrew if you don’t have it (optional but easiest way to get exiftool):
+   https://brew.sh
+
+3. Install exiftool (required — reads camera data from photos):
+   Open Terminal and run:
+
+     brew install exiftool
+
+4. Python 3 is usually already on a Mac (needed only for AI captions and some
+   optional scripts). Basic cataloguing works without setting up Python extras.
+
+
+C. Install Excel helpers (required once)
+----------------------------------------
+1. Open Terminal.
+2. Go into the Striders folder, for example:
+
+     cd ~/Downloads/Striders
+
+   (Use the real path to where you put the folder.)
+
+3. Run:
+
+     chmod +x scripts/*.sh
+     ./scripts/install_mac_helpers.sh
+
+4. Quit Excel completely if it was open, then open it again later.
+
+
+D. Make your own working spreadsheet
+------------------------------------
+1. In Finder, go to:
+
+     Striders/catalog/build/
+
+2. Duplicate "Strider_Media_Catalog_blank.xlsm"
+   (right-click → Duplicate).
+
+3. Move the copy somewhere sensible, e.g. Documents, and rename it
+   (example: My_Strider_Catalog.xlsm).
+
+4. Double-click to open it in Excel. Enable macros if prompted.
+
+
+E. Check that sheet “click” code is present (important)
+-------------------------------------------------------
+If clicking tag options does nothing, the Entry sheet’s small code stub is
+missing. Fix once:
+
+1. In Excel: Tools → Macro → Visual Basic… (or View → Developer → Visual Basic)
+2. Left side: your workbook → Microsoft Excel Objects → click Entry
+3. If that window is empty, open this file in TextEdit:
+
+     Striders/catalog/macros/EntrySheet_SelectionChange.txt
+
+4. Copy ALL of it and paste into the Entry code window.
+5. Do the same for Photos, Videos, and VideoEntry using the matching
+   PhotosSheet_… / VideosSheet_… / VideoEntrySheet_… .txt files.
+6. File → Save the workbook.
+
+Also run once (Tools → Macro → Macros…):
+
+  AssignMacroShortcuts
+
+That turns on keyboard shortcuts (Control+Shift+letter, not the Command ⌘ key).
+
+
+--------------------------------------------------------------------------------
+PART 2 — HOW TO USE THE SPREADSHEET
+--------------------------------------------------------------------------------
+
+Sheets you’ll use most
+----------------------
+  Entry        — form for ONE photo at a time (load, tag, append)
+  Photos       — list of all catalogued photos
+  Lists        — vocabularies for clickable tag options
+  VideoEntry / Videos — same idea for videos
+  ReadMe       — short notes inside the workbook
+
+
+Important: shortcuts use Control, not Command
+---------------------------------------------
+  Control + Shift + letter
+
+  Examples:
+    Control+Shift+I   Load photo from Preview
+    Control+Shift+Q   Load photo from Finder selection
+    Control+Shift+W   Append (save) that photo into Photos + write tags to file
+
+
+Everyday photo workflow (one file at a time)
+--------------------------------------------
+1. Put your photos in a folder on your Mac (any folder you like).
+2. Open a photo in Preview (or select it in Finder).
+3. In Excel, go to the Entry sheet.
+4. Press Control+Shift+I (Preview) or Control+Shift+Q (Finder).
+   Camera info (date, lens, etc.) should fill in.
+5. Click a tag OPTION in columns C, D, E… (for example Species or Locale).
+   The chosen value should appear in the value column (usually B).
+6. Press Control+Shift+W to Append.
+   → A row appears on the Photos sheet
+   → Tags are written into the photo file’s metadata
+7. Repeat for the next photo.
+
+
+Open or find a catalogued photo
+-------------------------------
+On the Photos sheet:
+  - Double-click the Name cell → opens in Preview
+  - Or select Name/row(s) → Control+Shift+O → Preview
+  - Control+Shift+J → show the file in Finder
+
+
+Batch tools (many files)
+------------------------
+Control+Shift+B  Batch import
+  Select many photos in Finder (or open them in Preview), then B.
+  Creates Photos rows with camera info only (no tags yet).
+  Can take a while — watch the status bar at the BOTTOM of the Excel window.
+
+Control+Shift+T  Copy tags
+  Tag ONE related photo fully (or use a row that already has tags).
+  On Photos, select the Name cells for that group (include the tagged one).
+  Press T — copies those tags to the others and writes them into the files.
+
+Control+Shift+S  Whole sequence
+  For a camera burst already tagged on disk with SequenceID:
+  load the 1/n frame, set tags, then S imports every frame in that sequence.
+
+
+Optional: AI captions
+---------------------
+Control+Shift+Y on selected Photos rows can write a caption (needs an API key
+and the Python caption script). Skip this until basic Load/Append works.
+Ask the person who shared the catalog if you want captions set up.
+
+
+If something stops working
+--------------------------
+  - Clicking tag options does nothing:
+      Re-paste EntrySheet_SelectionChange.txt (see Part 1 E),
+      then run macro FixEnableEvents.
+
+  - Shortcuts do nothing:
+      Run macro AssignMacroShortcuts
+      (or close and reopen the .xlsm).
+      Remember: Control key, not Command.
+
+  - “Could not run Strider…scpt”:
+      Quit Excel, run ./scripts/install_mac_helpers.sh again, reopen Excel.
+
+  - Preview says no permission:
+      Quit Preview fully and reopen, or allow Preview access to Pictures
+      in System Settings → Privacy & Security.
+
+
+What NOT to do
+--------------
+  - Don’t casually run scripts/setup_workbook.sh (can overwrite a catalog).
+  - Deleting a row on Photos only removes the catalog line — it does not
+    delete the photo file on disk.
+  - Don’t put API keys or passwords into the shared zip.
+
+
+Need more detail?
+-----------------
+See README.md in the Striders folder for the full technical guide.
+
+================================================================================
+END
+================================================================================

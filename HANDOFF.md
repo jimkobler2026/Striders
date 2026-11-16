@@ -1,9 +1,10 @@
 # Striders media catalog — handoff
 
-**Date:** 2026-11-13  
-**For:** Fresh agent — next focus is **sequence handling** (see queue below)  
+**Date:** 2026-11-15  
+**For:** Fresh agent — B/T + status-bar progress + friend sharing docs shipped; sequence queue still open below  
 **Repo:** `/Users/jim/Development/projects/Striders` (branch `main`)  
-**Day-to-day user guide:** `README.md` (includes “Sequence tagging and bulk import”)
+**Day-to-day user guide:** `README.md` (includes “Sequence tagging and bulk import”)  
+**Friend / non-technical setup:** `SETUP_FOR_FRIENDS.txt` (also linked from README “Sharing with another person”)
 
 ---
 
@@ -28,6 +29,10 @@ Working catalog: `catalog/main catalog/Strider_Media_Catalog.xlsm`. Duplicate th
 - **Caption column + Mac edit dialog:** Ctrl+Shift+Y → Photos **Caption** + embed `CAPTION:`; click Caption → `editCaption` dialog; Save re-embeds. Prompt is Scientific American–style plain prose (`caption_prompt.txt` + VBA `CaptionPromptText`).
 - **Name open = double-click:** No Name hyperlinks; double-click Name → Preview; Ctrl+Shift+O still multi-opens. `StripCatalogNameHyperlinks` / `ReapplyUiOnlyProtection` clears legacy links. Photos/Videos data area unlocked so Name/Caption are selectable under `EnableSelection=xlUnlockedCells`.
 - **HaveRaw? / VertPix / HorPix:** Columns on Photos (HaveRaw? after Path; VertPix/HorPix after FileSize). Load detects sibling RAW (`.arw`/`.cr2`/`.cr3`/`.nef`/`.nrw`/`.raf`/`.dng`) + ImageHeight/Width. Append writes keywords `rawYes`|`rawNo` and `VertPix:`/`HorPix:`. Macro **`EnsureRawAndPixelFields`** (from `AssignMacroShortcuts`). Backfill: `scripts/fill_raw_and_pixels.py --catalog` (`--write-keywords` optional).
+- **Batch import + tag copy (2026-11-14):** Ctrl+Shift+**B** `BatchImportSelectedPhotos` — Finder (or Preview) multi-select → Photos metadata rows only. Ctrl+Shift+**T** `CopyTagsToSelectedPhotos` — select Photos Name cells; copy user tags from seed row + Keyword write-back. No SequenceID auto-expand (**S** still expands). Helper: `listBatchImportPaths` in StriderFinderMeta.
+- **Status-bar progress (2026-11-15):** Slow macros **B** / **T** / **S** / **Y** use `ProgressBegin` / `ProgressStep` / `ProgressDone` (Excel status bar + wait cursor). Look at the bottom of the Excel window while batches run.
+- **Click-pick after empty Entry stub:** If Option clicks stop filling Entry after a batch, paste `EntrySheet_SelectionChange.txt` / `VideoEntrySheet_SelectionChange.txt` into the sheet modules, or run **`FixEnableEvents`**. Empty stubs break click-pick even when EnableEvents is True.
+- **Sharing docs (2026-11-15):** README “Sharing with another person”; plain-language **`SETUP_FOR_FRIENDS.txt`**. Share blank + macros/scripts, not personal working catalog / `.env`.
 
 ### Already on `main` (earlier)
 
@@ -45,7 +50,9 @@ Ingest folders under `~/Pictures/environmental caustics/`. Prefer **ingest folde
 # paste Photos/Videos stubs if missing, run AssignMacroShortcuts, Save
 ```
 
-Smoke: Load (I/Q) → click-pick → Append (W); sequence bulk (S); caption (Y); Name double-click; Caption click; HaveRaw?/pixels on Load.
+Smoke: Load (I/Q) → click-pick → Append (W); sequence bulk (S); batch **B** then **T**; caption (Y); Name double-click; Caption click; HaveRaw?/pixels on Load.
+
+User action after pull: re-import `CatalogMacros.bas`, `./scripts/install_mac_helpers.sh` + restart Excel, run **`AssignMacroShortcuts`**.
 
 ---
 
@@ -127,6 +134,10 @@ User priority after 2026-11-13 caption/raw/pixel work: **improve how sequences a
 | Caption column + edit dialog | 2026-11-13 | Done | SciAm prompt; Mac dialog; Captions sheet retired |
 | Name double-click open | 2026-11-13 | Done | Hyperlinks stripped; data area unlock |
 | HaveRaw? / VertPix / HorPix | 2026-11-13 | Done | Load + Append keywords; fill_raw_and_pixels.py |
+| Batch import B + tag copy T | 2026-11-14 | Done | listBatchImportPaths; metadata-only B; Photos selection T |
+| Status-bar progress B/T/S/Y | 2026-11-15 | Done | ProgressBegin/Step/Done; wait cursor |
+| Entry/VideoEntry stub paste + FixEnableEvents note | 2026-11-15 | Done | Empty SelectionChange broke click-pick after B |
+| Friend sharing README + SETUP_FOR_FRIENDS.txt | 2026-11-15 | Done | Non-technical install + daily-use guide |
 | Sequence handling queue | 2026-11-13 | Next | S1–S6 above — start with user punch-list |
 
 ---
@@ -141,6 +152,8 @@ User priority after 2026-11-13 caption/raw/pixel work: **improve how sequences a
 | E / U / R | Video load / append |
 | O / J / D | Preview / Finder / trash |
 | Y | Photos Caption column + embed CAPTION: |
+| B | BatchImportSelectedPhotos (Finder/Preview → metadata rows) |
+| T | CopyTagsToSelectedPhotos (seed row tags → selection) |
 | K | AddCatalogField |
 
 Helpers: `~/Library/Application Scripts/com.microsoft.Excel/`  

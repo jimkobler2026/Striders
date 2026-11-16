@@ -1,6 +1,7 @@
 ' Paste ALL of this into: VBA Project → Microsoft Excel Objects → Entry
 ' (Delete any old code in that window first.)
 ' Then Save.
+' Required for click-to-pick: option in C+ → value in B (or D/F for paired labels).
 
 Option Explicit
 

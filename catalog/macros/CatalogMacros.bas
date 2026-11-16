@@ -16,6 +16,8 @@ Option Explicit
 '   Control+Shift+D  TrashFrontPreviewDocument  (confirm, then Trash)
 '   Control+Shift+K  AddCatalogField            (new click-pick tag)
 '   Control+Shift+S  AppendPhotoSequence        (all frames of Entry SequenceID)
+'   Control+Shift+B  BatchImportSelectedPhotos  (Finder/Preview multi-select → metadata rows)
+'   Control+Shift+T  CopyTagsToSelectedPhotos   (Photos Name selection ← seed row tags)
 ' Re-import this module, then run AssignMacroShortcuts (or reopen the workbook).
 ' Re-import alone does not rebind OnKey while the book stays open — Auto_Open only runs on open.
 ' If click-to-pick stops working, run FixEnableEvents, then re-paste Entry/VideoEntry SelectionChange.
@@ -50,7 +52,54 @@ End Sub
 
 ' Run if click-to-pick / sheet events seem dead.
 Public Sub FixEnableEvents()
+    On Error Resume Next
     Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    UnlockEntryFormEditables Worksheets(ENTRY_SHEET)
+    UnlockEntryFormEditables Worksheets(VIDEO_ENTRY_SHEET)
+    On Error GoTo 0
+    MsgBox "Events re-enabled. Click-pick on Entry should work again." & vbCrLf & _
+           "If not: re-paste catalog/macros/EntrySheet_SelectionChange.txt into the Entry sheet module.", _
+           vbInformation
+End Sub
+
+' Entry/VideoEntry: value (B) + options (C+) must be selectable under xlUnlockedCells.
+Private Sub UnlockEntryFormEditables(ByVal ws As Worksheet)
+    Dim r As Long
+    If ws Is Nothing Then Exit Sub
+    On Error Resume Next
+    For r = ENTRY_FIRST_FIELD_ROW To 100
+        UnlockEntryTagRow ws, r
+    Next r
+    On Error GoTo 0
+End Sub
+
+' Slow macros: status bar (Excel bottom) + wait cursor. Call ProgressDone on every exit.
+Private Sub ProgressBegin(ByVal msg As String)
+    On Error Resume Next
+    Application.Cursor = xlWait
+    Application.StatusBar = msg
+    DoEvents
+    On Error GoTo 0
+End Sub
+
+Private Sub ProgressStep(ByVal doneCount As Long, ByVal total As Long, ByVal msg As String)
+    On Error Resume Next
+    If total > 0 Then
+        Application.StatusBar = msg & "  " & doneCount & " / " & total & _
+            "  (" & Format$((100# * doneCount) / total, "0") & "%)"
+    Else
+        Application.StatusBar = msg
+    End If
+    DoEvents
+    On Error GoTo 0
+End Sub
+
+Private Sub ProgressDone()
+    On Error Resume Next
+    Application.StatusBar = False
+    Application.Cursor = xlDefault
+    On Error GoTo 0
 End Sub
 
 Public Sub AssignMacroShortcuts()
@@ -74,6 +123,8 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+y"
     Application.OnKey "^+k"
     Application.OnKey "^+s"
+    Application.OnKey "^+b"
+    Application.OnKey "^+t"
 
     Application.OnKey "^+q", "LoadFromFinderSelection"
     Application.OnKey "^+i", "LoadFromPreviewSelection"
@@ -87,6 +138,8 @@ Public Sub AssignMacroShortcuts()
     Application.OnKey "^+y", "CaptionSelectedPhotos"
     Application.OnKey "^+k", "AddCatalogField"
     Application.OnKey "^+s", "AppendPhotoSequence"
+    Application.OnKey "^+b", "BatchImportSelectedPhotos"
+    Application.OnKey "^+t", "CopyTagsToSelectedPhotos"
     On Error GoTo 0
     EnsureRawAndPixelFields
     ReapplyUiOnlyProtection
@@ -189,6 +242,8 @@ Public Sub ClearMacroShortcuts()
     Application.OnKey "^+d"
     Application.OnKey "^+k"
     Application.OnKey "^+s"
+    Application.OnKey "^+b"
+    Application.OnKey "^+t"
     On Error GoTo 0
 End Sub
 
@@ -480,7 +535,7 @@ Private Sub InsertCatalogColumn(ByVal sheetName As String, ByVal fieldName As St
     On Error GoTo 0
 End Sub
 
-' Click an option in columns C+, then run this macro (fills column B).
+' Click an option cell, then run this if SelectionChange is missing (fills value cell).
 Public Sub PickSelectedOption()
     HandleEntryOptionClick ActiveSheet, ActiveCell
 End Sub
@@ -488,25 +543,56 @@ End Sub
 Public Sub HandleEntryOptionClick(ByVal Sh As Object, ByVal Target As Range)
     Dim label As String
     Dim picked As String
+    Dim valueCol As Long
+    Dim labelCol As Long
 
     On Error GoTo safeExit
     If Sh Is Nothing Then GoTo safeExit
     If Not IsEntryFormSheet(Sh.Name) Then GoTo safeExit
     If Target Is Nothing Then GoTo safeExit
     If Target.Rows.Count <> 1 Or Target.Columns.Count <> 1 Then GoTo safeExit
-    If Target.Column < ENTRY_OPTION_FIRST_COL Then GoTo safeExit
 
     picked = Trim$(CStr(Target.Value))
     If Len(picked) = 0 Then GoTo safeExit
 
-    label = Trim$(CStr(Sh.Cells(Target.Row, 1).Value))
-    If Not IsClickPickField(label) Then GoTo safeExit
+    ' Label may be in A, C, or E (paired layout); value is the cell to its right.
+    If Not FindClickPickLabelOnRow(Sh, Target.Row, Target.Column, label, labelCol, valueCol) Then GoTo safeExit
 
     Application.EnableEvents = False
-    Sh.Cells(Target.Row, 2).Value = picked
+    Sh.Cells(Target.Row, valueCol).Value = picked
 safeExit:
     Application.EnableEvents = True
 End Sub
+
+' True if this row has a Lists-backed label and Target is in its options area (right of value).
+Private Function FindClickPickLabelOnRow(ByVal Sh As Object, ByVal rowNum As Long, _
+                                        ByVal targetCol As Long, ByRef label As String, _
+                                        ByRef labelCol As Long, ByRef valueCol As Long) As Boolean
+    Dim candidates As Variant
+    Dim i As Long
+    Dim lc As Long
+    Dim vc As Long
+    Dim lab As String
+
+    FindClickPickLabelOnRow = False
+    candidates = Array(1, 3, 5)
+    For i = LBound(candidates) To UBound(candidates)
+        lc = CLng(candidates(i))
+        vc = lc + 1
+        lab = Trim$(CStr(Sh.Cells(rowNum, lc).Value))
+        If Len(lab) = 0 Then GoTo nextCand
+        If Not IsClickPickField(lab) Then GoTo nextCand
+        ' Options are to the right of the value cell.
+        If targetCol > vc Then
+            label = lab
+            labelCol = lc
+            valueCol = vc
+            FindClickPickLabelOnRow = True
+            Exit Function
+        End If
+nextCand:
+    Next i
+End Function
 
 Private Function IsEntryFormSheet(ByVal sheetName As String) As Boolean
     If StrComp(sheetName, ENTRY_SHEET, vbTextCompare) = 0 Then IsEntryFormSheet = True
@@ -772,6 +858,9 @@ Public Sub AppendPhotoSequence()
     Dim destRow As Long
     Dim fileName As String
     Dim ans As VbMsgBoxResult
+    Dim memberTotal As Long
+    Dim memberDone As Long
+    Dim j As Long
 
     path = NormalizePath(Trim$(CStr(FormValue(ENTRY_SHEET, "Path"))))
     seqID = Trim$(CStr(FormValue(ENTRY_SHEET, "SequenceID")))
@@ -812,21 +901,25 @@ Public Sub AppendPhotoSequence()
         End If
     Next i
 
+    ProgressBegin "Sequence append: listing members for " & seqID & "…"
 #If Mac Then
     On Error GoTo appleScriptMissing
     raw = AppleScriptTask("StriderFinderMeta.scpt", "listSequenceMembers", path & vbTab & seqID)
     On Error GoTo 0
 #Else
+    ProgressDone
     MsgBox "AppendPhotoSequence is implemented for Mac Excel.", vbInformation
     Exit Sub
 #End If
 
     parts = Split(raw, vbTab)
     If UBound(parts) < 0 Then
+        ProgressDone
         MsgBox "Empty response listing sequence members.", vbExclamation
         Exit Sub
     End If
     If parts(0) = "ERROR" Then
+        ProgressDone
         If UBound(parts) >= 1 Then
             MsgBox parts(1), vbExclamation
         Else
@@ -835,6 +928,7 @@ Public Sub AppendPhotoSequence()
         Exit Sub
     End If
     If UBound(parts) < 2 Then
+        ProgressDone
         MsgBox "No files found for SequenceID " & seqID & " in that folder." & vbCrLf & _
                "Run tag_sequences.py --write on the ingest folder first.", vbExclamation
         Exit Sub
@@ -842,8 +936,14 @@ Public Sub AppendPhotoSequence()
 
     EnsureColumns Worksheets(PHOTOS_SHEET), PhotoFieldList()
     Set ws = Worksheets(PHOTOS_SHEET)
+    memberTotal = 0
+    For i = 1 To UBound(parts) Step 2
+        If Len(Trim$(parts(i))) > 0 Then memberTotal = memberTotal + 1
+    Next i
+    ProgressBegin "Sequence append: importing " & memberTotal & " frame(s)…"
     Application.ScreenUpdating = False
     countOk = 0
+    memberDone = 0
 
     ' parts: OK, path1, pos1, path2, pos2, ...
     For i = 1 To UBound(parts) Step 2
@@ -851,11 +951,12 @@ Public Sub AppendPhotoSequence()
         memberPath = NormalizePath(Trim$(parts(i)))
         memberPos = Trim$(parts(i + 1))
         If Len(memberPath) = 0 Then GoTo nextMember
+        memberDone = memberDone + 1
+        ProgressStep memberDone, memberTotal, "Sequence append"
 
         If Not FillEntryAutoFromPath(memberPath) Then GoTo nextMember
 
         ' Restore seed tags; Sequence* come from the file / member list below.
-        Dim j As Long
         For j = LBound(seedLabels) To UBound(seedLabels)
             label = CStr(seedLabels(j))
             If seedVals(j) <> Chr$(0) Then
@@ -886,6 +987,7 @@ nextMember:
 
     ClearFormFields ENTRY_SHEET, PhotoFieldList()
     Application.ScreenUpdating = True
+    ProgressDone
     ws.Activate
     MsgBox "Appended " & countOk & " frame(s) for SequenceID " & seqID & "." & vbCrLf & _
            "Shared tags came from Entry (1/n seed); each row kept its own SequencePos.", vbInformation
@@ -893,6 +995,7 @@ nextMember:
 
 appleScriptMissing:
     Application.ScreenUpdating = True
+    ProgressDone
     MsgBox "Could not run StriderFinderMeta.scpt (listSequenceMembers)." & vbCrLf & _
            "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
 End Sub
@@ -910,6 +1013,395 @@ Private Function IsSequenceSeedField(ByVal label As String) As Boolean
         Case Else
             IsSequenceSeedField = IsFormFieldLabel(label)
     End Select
+End Function
+
+' Camera / identity / Sequence* columns written by batch import (not user tags or Caption).
+Private Function IsBatchImportField(ByVal label As String) As Boolean
+    Select Case label
+        Case "Name", "Path", "HaveRaw?", "Date", "Time", "Type", "FileSize", _
+             "VertPix", "HorPix", _
+             "Camera", "Mode", "Lens", "Speed", "f-stop", "ISO", _
+             "Focus Distance", "GPS", "Serial Number", _
+             "Sequence", "SequenceID", "SequencePos"
+            IsBatchImportField = True
+        Case Else
+            IsBatchImportField = False
+    End Select
+End Function
+
+' Phase 1: Finder or Preview multi-select → Photos rows with EXIF/Sequence*/HaveRaw?/pixels only.
+Public Sub BatchImportSelectedPhotos()
+    Dim raw As String
+    Dim parts() As String
+    Dim i As Long
+    Dim path As String
+    Dim ws As Worksheet
+    Dim fields As Variant
+    Dim fileName As String
+    Dim destRow As Long
+    Dim countNew As Long
+    Dim countUpd As Long
+    Dim countFail As Long
+    Dim total As Long
+    Dim isNew As Boolean
+    Dim doneCount As Long
+
+    ProgressBegin "Batch import: reading Finder/Preview selection…"
+#If Mac Then
+    On Error GoTo appleScriptMissing
+    raw = AppleScriptTask("StriderFinderMeta.scpt", "listBatchImportPaths", "")
+    On Error GoTo 0
+#Else
+    ProgressDone
+    MsgBox "BatchImportSelectedPhotos is implemented for Mac Excel.", vbInformation
+    Exit Sub
+#End If
+
+    If Len(raw) = 0 Then
+        ProgressDone
+        MsgBox "No response listing selected files.", vbExclamation
+        Exit Sub
+    End If
+    ' ERROR responses use tab; success uses NUL-separated paths after OK.
+    If Left$(raw, 5) = "ERROR" Then
+        ProgressDone
+        parts = Split(raw, vbTab)
+        If UBound(parts) >= 1 Then
+            MsgBox parts(1), vbExclamation
+        Else
+            MsgBox "Select image file(s) in Finder, or open saved images in Preview.", vbExclamation
+        End If
+        Exit Sub
+    End If
+    parts = Split(raw, Chr$(0))
+    If UBound(parts) < 0 Then
+        ProgressDone
+        MsgBox "Could not parse selected file list.", vbExclamation
+        Exit Sub
+    End If
+    If StrComp(parts(0), "OK", vbTextCompare) <> 0 Then
+        ProgressDone
+        MsgBox "Unexpected batch path list response.", vbExclamation
+        Exit Sub
+    End If
+
+    total = 0
+    For i = 1 To UBound(parts)
+        If Len(Trim$(parts(i))) > 0 Then total = total + 1
+    Next i
+    If total = 0 Then
+        ProgressDone
+        MsgBox "No image paths in the selection.", vbExclamation
+        Exit Sub
+    End If
+
+    ProgressStep 0, total, "Batch import: preparing…"
+    EnsureColumns Worksheets(PHOTOS_SHEET), PhotoFieldList()
+    EnsureRawAndPixelFields
+    Set ws = Worksheets(PHOTOS_SHEET)
+    fields = PhotoFieldList()
+    countNew = 0
+    countUpd = 0
+    countFail = 0
+    doneCount = 0
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    For i = 1 To UBound(parts)
+        path = NormalizePath(Trim$(parts(i)))
+        If Len(path) = 0 Then GoTo nextImport
+        doneCount = doneCount + 1
+        ProgressStep doneCount, total, "Batch import"
+        If Not FillEntryAutoFromPath(path) Then
+            countFail = countFail + 1
+            GoTo nextImport
+        End If
+        fileName = Trim$(CStr(FormValue(ENTRY_SHEET, "Name")))
+        If Len(fileName) = 0 Then fileName = BaseName(path)
+        destRow = FindRowByFileName(ws, fileName)
+        isNew = (destRow = 0)
+        If isNew Then destRow = NextDataRow(ws)
+        CopyBatchImportFieldsToRow ENTRY_SHEET, ws, destRow, fields
+        FormatCatalogField ws, destRow, "Date", "m/d/yy"
+        FormatCatalogField ws, destRow, "Time", "[$-F400]h:mm:ss AM/PM"
+        AddNameHyperlink ws, destRow, path, fileName
+        If isNew Then countNew = countNew + 1 Else countUpd = countUpd + 1
+nextImport:
+    Next i
+
+    ClearFormFields ENTRY_SHEET, fields
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    ProgressDone
+    ws.Activate
+    MsgBox "Batch import done." & vbCrLf & _
+           "New rows: " & countNew & "  /  updated: " & countUpd & "  /  failed: " & countFail & vbCrLf & vbCrLf & _
+           "User tags were not applied. Tag one related row, select Name cells, then Ctrl+Shift+T.", _
+           vbInformation
+    Exit Sub
+
+appleScriptMissing:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    ProgressDone
+    MsgBox "Could not run StriderFinderMeta.scpt (listBatchImportPaths)." & vbCrLf & _
+           "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
+End Sub
+
+Private Sub CopyBatchImportFieldsToRow(ByVal sheetName As String, ws As Worksheet, _
+                                      ByVal destRow As Long, fields As Variant)
+    Dim i As Long
+    Dim nm As String
+    For i = LBound(fields) To UBound(fields)
+        nm = CStr(fields(i))
+        If IsBatchImportField(nm) Then
+            SetCellByHeader ws, destRow, CatalogHeaderName(nm), FormValue(sheetName, nm)
+        End If
+    Next i
+End Sub
+
+' Phase 2: copy user tags from seed Photos row onto selected Name/rows + write Keywords.
+Public Sub CopyTagsToSelectedPhotos()
+    Dim ws As Worksheet
+    Dim rows As Collection
+    Dim seedRow As Long
+    Dim r As Variant
+    Dim targetRow As Long
+    Dim fields As Variant
+    Dim i As Long
+    Dim label As String
+    Dim hdr As String
+    Dim path As String
+    Dim countOk As Long
+    Dim countSkip As Long
+    Dim embedFail As Long
+    Dim ans As VbMsgBoxResult
+    Dim nTargets As Long
+    Dim doneCount As Long
+
+    If Selection Is Nothing Then
+        MsgBox "On Photos, select Name cell(s) or row(s) to receive tags.", vbExclamation
+        Exit Sub
+    End If
+    If StrComp(Selection.Worksheet.Name, PHOTOS_SHEET, vbTextCompare) <> 0 Then
+        MsgBox "Switch to Photos, select the related Name cells, then run again.", vbExclamation
+        Exit Sub
+    End If
+
+    Set ws = Worksheets(PHOTOS_SHEET)
+    Set rows = CollectSelectedCatalogRows(ws)
+    If rows.Count = 0 Then
+        MsgBox "Could not resolve any Photos data rows from the selection.", vbExclamation
+        Exit Sub
+    End If
+
+    seedRow = FindTagSeedRow(ws, rows)
+    If seedRow = 0 Then
+        MsgBox "No tagged seed row in the selection." & vbCrLf & _
+               "Tag one file first (Entry → W, or edit tag cells), include it in the selection, then retry.", _
+               vbExclamation
+        Exit Sub
+    End If
+
+    nTargets = 0
+    For Each r In rows
+        If CLng(r) <> seedRow Then nTargets = nTargets + 1
+    Next r
+    If nTargets = 0 Then
+        ' Only seed selected — still re-write Keywords to that file.
+        nTargets = 1
+    End If
+    If rows.Count >= 50 Then
+        ans = MsgBox("Copy tags from row " & seedRow & " to " & rows.Count & " selected row(s) and write Keywords to each file?", _
+                     vbYesNo + vbQuestion)
+        If ans <> vbYes Then Exit Sub
+    End If
+
+    fields = PhotoFieldList()
+    countOk = 0
+    countSkip = 0
+    embedFail = 0
+    doneCount = 0
+    ProgressBegin "Copy tags from row " & seedRow & "…"
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    For Each r In rows
+        targetRow = CLng(r)
+        doneCount = doneCount + 1
+        ProgressStep doneCount, rows.Count, "Copy tags"
+        If targetRow <> seedRow Then
+            For i = LBound(fields) To UBound(fields)
+                label = CStr(fields(i))
+                If IsSequenceSeedField(label) Then
+                    hdr = CatalogHeaderName(label)
+                    SetCellByHeader ws, targetRow, hdr, CellByHeader(ws, seedRow, hdr)
+                End If
+            Next i
+        End If
+        path = NormalizePath(PathFromCatalogRow(ws, targetRow))
+        If Len(path) = 0 Then
+            countSkip = countSkip + 1
+            GoTo nextTagRow
+        End If
+        If Not WriteCatalogTagsFromPhotosRow(ws, targetRow, path) Then
+            embedFail = embedFail + 1
+        End If
+        countOk = countOk + 1
+nextTagRow:
+    Next r
+
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    ProgressDone
+    ws.Activate
+    MsgBox "Tag copy done (seed row " & seedRow & ")." & vbCrLf & _
+           "Rows written: " & countOk & "  /  no path: " & countSkip & _
+           "  /  file write failed: " & embedFail, vbInformation
+End Sub
+
+Private Function CollectSelectedCatalogRows(ByVal ws As Worksheet) As Collection
+    Dim rows As Collection
+    Dim cell As Range
+    Dim r As Long
+    Dim i As Long
+    Dim found As Boolean
+
+    Set rows = New Collection
+    If Selection Is Nothing Then
+        Set CollectSelectedCatalogRows = rows
+        Exit Function
+    End If
+    For Each cell In Selection.Cells
+        If cell.Worksheet.Name <> ws.Name Then GoTo contRow
+        r = cell.Row
+        If r <= SheetHeaderRow(ws) Then GoTo contRow
+        found = False
+        For i = 1 To rows.Count
+            If CLng(rows(i)) = r Then
+                found = True
+                Exit For
+            End If
+        Next i
+        If Not found Then rows.Add r
+contRow:
+    Next cell
+    Set CollectSelectedCatalogRows = rows
+End Function
+
+Private Function FindTagSeedRow(ByVal ws As Worksheet, rows As Collection) As Long
+    Dim activeRow As Long
+    Dim r As Variant
+    Dim best As Long
+
+    FindTagSeedRow = 0
+    best = 0
+    On Error Resume Next
+    activeRow = ActiveCell.Row
+    On Error GoTo 0
+    If activeRow > SheetHeaderRow(ws) Then
+        If RowInCollection(rows, activeRow) Then
+            If PhotosRowHasUserTags(ws, activeRow) Then
+                FindTagSeedRow = activeRow
+                Exit Function
+            End If
+        End If
+    End If
+    For Each r In rows
+        If PhotosRowHasUserTags(ws, CLng(r)) Then
+            FindTagSeedRow = CLng(r)
+            Exit Function
+        End If
+        If best = 0 Then best = CLng(r)
+    Next r
+End Function
+
+Private Function RowInCollection(rows As Collection, ByVal rowNum As Long) As Boolean
+    Dim r As Variant
+    For Each r In rows
+        If CLng(r) = rowNum Then
+            RowInCollection = True
+            Exit Function
+        End If
+    Next r
+End Function
+
+Private Function PhotosRowHasUserTags(ByVal ws As Worksheet, ByVal rowNum As Long) As Boolean
+    Dim fields As Variant
+    Dim i As Long
+    Dim label As String
+    Dim hdr As String
+    Dim v As String
+
+    fields = PhotoFieldList()
+    For i = LBound(fields) To UBound(fields)
+        label = CStr(fields(i))
+        If IsSequenceSeedField(label) Then
+            hdr = CatalogHeaderName(label)
+            v = Trim$(CStr(CellByHeader(ws, rowNum, hdr)))
+            If Len(v) > 0 Then
+                PhotosRowHasUserTags = True
+                Exit Function
+            End If
+        End If
+    Next i
+End Function
+
+Private Function CellByHeader(ByVal ws As Worksheet, ByVal rowNum As Long, ByVal headerName As String) As Variant
+    Dim col As Long
+    col = HeaderCol(ws, headerName)
+    If col = 0 Then
+        CellByHeader = ""
+    Else
+        CellByHeader = ws.Cells(rowNum, col).Value
+    End If
+End Function
+
+' Build write-back blob from a Photos row and write Keywords (True if write OK / nothing to write).
+Private Function WriteCatalogTagsFromPhotosRow(ByVal ws As Worksheet, ByVal rowNum As Long, _
+                                               ByVal path As String) As Boolean
+    Dim fields As Variant
+    Dim i As Long
+    Dim label As String
+    Dim keyName As String
+    Dim val As String
+    Dim blob As String
+    Dim anyTag As Boolean
+    Dim payload As String
+    Dim raw As String
+    Dim parts() As String
+
+    WriteCatalogTagsFromPhotosRow = True
+    fields = PhotoFieldList()
+    blob = ""
+    anyTag = False
+    For i = LBound(fields) To UBound(fields)
+        label = CStr(fields(i))
+        If IsWritebackField(label) Then
+            keyName = KeywordKeyForLabel(label)
+            val = Trim$(CStr(CellByHeader(ws, rowNum, CatalogHeaderName(label))))
+            If Len(val) > 0 Then anyTag = True
+            If Len(blob) > 0 Then blob = blob & "|"
+            blob = blob & keyName & "=" & val
+        End If
+    Next i
+    If Not anyTag Then Exit Function
+
+    payload = path & vbTab & blob
+#If Mac Then
+    On Error GoTo writeFail
+    raw = AppleScriptTask("StriderFinderMeta.scpt", "writeCatalogTags", payload)
+    On Error GoTo 0
+#Else
+    Exit Function
+#End If
+    parts = Split(raw, vbTab)
+    If UBound(parts) >= 0 Then
+        If parts(0) = "ERROR" Then WriteCatalogTagsFromPhotosRow = False
+    End If
+    Exit Function
+writeFail:
+    WriteCatalogTagsFromPhotosRow = False
 End Function
 
 ' Fill Entry auto/camera/sequence fields from a path (no MsgBox). False on failure.
@@ -1229,11 +1721,12 @@ Public Sub CaptionSelectedPhotos()
     errCount = 0
     missCount = 0
     embedFail = 0
-    Application.StatusBar = "Captioning " & paths.Count & " photo(s)... (Ctrl+Shift+Y)"
+    ProgressBegin "Captioning " & paths.Count & " photo(s)…"
 
     For Each p In paths
         path = NormalizePath(CStr(p))
         fileName = BaseName(path)
+        ProgressStep okCount + errCount + missCount + 1, paths.Count, "Captioning"
         destRow = FindPhotosRowForPath(photosWs, path)
         If destRow = 0 Then
             missCount = missCount + 1
@@ -1244,8 +1737,8 @@ Public Sub CaptionSelectedPhotos()
         raw = AppleScriptTask("StriderCaption.scpt", "captionPhoto", path & vbTab & DEFAULT_CAPTION_PROVIDER)
         On Error GoTo 0
 #Else
+        ProgressDone
         MsgBox "CaptionSelectedPhotos is implemented for Mac Excel.", vbInformation
-        Application.StatusBar = False
         Exit Sub
 #End If
         parts = Split(raw, vbTab)
@@ -1279,7 +1772,7 @@ Public Sub CaptionSelectedPhotos()
 nextPath:
     Next p
 
-    Application.StatusBar = False
+    ProgressDone
     photosWs.Activate
     MsgBox "Captions written: " & okCount & "  /  failed: " & errCount & _
            "  /  no Photos row: " & missCount & _
@@ -1291,13 +1784,13 @@ nextPath:
     Exit Sub
 
 appleScriptMissing:
-    Application.StatusBar = False
+    ProgressDone
     MsgBox "Could not run StriderCaption.scpt." & vbCrLf & _
            "Run scripts/install_mac_helpers.sh, then restart Excel.", vbCritical
     Exit Sub
 
 ensureFail:
-    Application.StatusBar = False
+    ProgressDone
     MsgBox "Could not prepare the Photos Caption column:" & vbCrLf & Err.Description & vbCrLf & vbCrLf & _
            "If the workbook is protected, run macro ReapplyUiOnlyProtection, then try again.", vbCritical
 End Sub
@@ -1711,6 +2204,7 @@ Public Sub ReapplyUiOnlyProtection()
         UnprotectSheet ws
         Select Case nm
             Case ENTRY_SHEET, VIDEO_ENTRY_SHEET
+                UnlockEntryFormEditables ws
                 ws.Protect Password:="", DrawingObjects:=True, Contents:=True, Scenarios:=True, _
                     UserInterfaceOnly:=True, _
                     AllowFormattingCells:=True, AllowFormattingColumns:=False, AllowFormattingRows:=False, _
