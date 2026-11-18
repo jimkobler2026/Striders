@@ -36,6 +36,8 @@ Private Const ENTRY_FIRST_FIELD_ROW As Long = 9
 Private Const ENTRY_OPTION_FIRST_COL As Long = 3
 ' Default caption provider: google = Gemini Flash (cheap + good enough). Use "anthropic" for Claude.
 Private Const DEFAULT_CAPTION_PROVIDER As String = "google"
+' Ctrl+Shift+T: files per AppleScriptTask writeCatalogTagsBatch call (keeps status bar moving).
+Private Const TAG_WRITE_CHUNK As Long = 25
 ' Guard so caption-edit dialog does not re-enter on SelectionChange.
 Private gCaptionEditorOpen As Boolean
 
@@ -1164,6 +1166,7 @@ End Sub
 Public Sub CopyTagsToSelectedPhotos()
     Dim ws As Worksheet
     Dim rows As Collection
+    Dim writePayloads As Collection
     Dim seedRow As Long
     Dim r As Variant
     Dim targetRow As Long
@@ -1172,12 +1175,14 @@ Public Sub CopyTagsToSelectedPhotos()
     Dim label As String
     Dim hdr As String
     Dim path As String
+    Dim blob As String
     Dim countOk As Long
     Dim countSkip As Long
     Dim embedFail As Long
     Dim ans As VbMsgBoxResult
     Dim nTargets As Long
     Dim doneCount As Long
+    Dim writeTotal As Long
 
     If Selection Is Nothing Then
         MsgBox "On Photos, select Name cell(s) or row(s) to receive tags.", vbExclamation
@@ -1218,6 +1223,7 @@ Public Sub CopyTagsToSelectedPhotos()
     End If
 
     fields = PhotoFieldList()
+    Set writePayloads = New Collection
     countOk = 0
     countSkip = 0
     embedFail = 0
@@ -1229,7 +1235,7 @@ Public Sub CopyTagsToSelectedPhotos()
     For Each r In rows
         targetRow = CLng(r)
         doneCount = doneCount + 1
-        ProgressStep doneCount, rows.Count, "Copy tags"
+        ProgressStep doneCount, rows.Count, "Copy tags: sheet"
         If targetRow <> seedRow Then
             For i = LBound(fields) To UBound(fields)
                 label = CStr(fields(i))
@@ -1244,12 +1250,16 @@ Public Sub CopyTagsToSelectedPhotos()
             countSkip = countSkip + 1
             GoTo nextTagRow
         End If
-        If Not WriteCatalogTagsFromPhotosRow(ws, targetRow, path) Then
-            embedFail = embedFail + 1
-        End If
+        blob = BuildCatalogTagBlobFromPhotosRow(ws, targetRow)
+        If Len(blob) > 0 Then writePayloads.Add path & vbTab & blob
         countOk = countOk + 1
 nextTagRow:
     Next r
+
+    writeTotal = writePayloads.Count
+    If writeTotal > 0 Then
+        embedFail = WriteCatalogTagsBatchPayloads(writePayloads)
+    End If
 
     Application.ScreenUpdating = True
     Application.EnableEvents = True
@@ -1357,9 +1367,8 @@ Private Function CellByHeader(ByVal ws As Worksheet, ByVal rowNum As Long, ByVal
     End If
 End Function
 
-' Build write-back blob from a Photos row and write Keywords (True if write OK / nothing to write).
-Private Function WriteCatalogTagsFromPhotosRow(ByVal ws As Worksheet, ByVal rowNum As Long, _
-                                               ByVal path As String) As Boolean
+' Build write-back blob from a Photos row (empty if nothing to write).
+Private Function BuildCatalogTagBlobFromPhotosRow(ByVal ws As Worksheet, ByVal rowNum As Long) As String
     Dim fields As Variant
     Dim i As Long
     Dim label As String
@@ -1367,11 +1376,7 @@ Private Function WriteCatalogTagsFromPhotosRow(ByVal ws As Worksheet, ByVal rowN
     Dim val As String
     Dim blob As String
     Dim anyTag As Boolean
-    Dim payload As String
-    Dim raw As String
-    Dim parts() As String
 
-    WriteCatalogTagsFromPhotosRow = True
     fields = PhotoFieldList()
     blob = ""
     anyTag = False
@@ -1385,23 +1390,87 @@ Private Function WriteCatalogTagsFromPhotosRow(ByVal ws As Worksheet, ByVal rowN
             blob = blob & keyName & "=" & val
         End If
     Next i
-    If Not anyTag Then Exit Function
-
-    payload = path & vbTab & blob
-#If Mac Then
-    On Error GoTo writeFail
-    raw = AppleScriptTask("StriderFinderMeta.scpt", "writeCatalogTags", payload)
-    On Error GoTo 0
-#Else
-    Exit Function
-#End If
-    parts = Split(raw, vbTab)
-    If UBound(parts) >= 0 Then
-        If parts(0) = "ERROR" Then WriteCatalogTagsFromPhotosRow = False
+    If anyTag Then
+        BuildCatalogTagBlobFromPhotosRow = blob
+    Else
+        BuildCatalogTagBlobFromPhotosRow = ""
     End If
+End Function
+
+' Write Keywords for path+blob records via writeCatalogTagsBatch (chunks of TAG_WRITE_CHUNK).
+' Returns count of ERROR status lines.
+Private Function WriteCatalogTagsBatchPayloads(payloads As Collection) As Long
+    Dim chunkStart As Long
+    Dim chunkEnd As Long
+    Dim i As Long
+    Dim chunkPayload As String
+    Dim raw As String
+    Dim lines() As String
+    Dim lineParts() As String
+    Dim failCount As Long
+    Dim doneCount As Long
+    Dim total As Long
+    Dim nl As String
+
+    failCount = 0
+    total = payloads.Count
+    If total = 0 Then
+        WriteCatalogTagsBatchPayloads = 0
+        Exit Function
+    End If
+    nl = Chr$(10)
+    doneCount = 0
+
+#If Mac Then
+    On Error GoTo batchFail
+    For chunkStart = 1 To total Step TAG_WRITE_CHUNK
+        chunkEnd = chunkStart + TAG_WRITE_CHUNK - 1
+        If chunkEnd > total Then chunkEnd = total
+        chunkPayload = ""
+        For i = chunkStart To chunkEnd
+            If Len(chunkPayload) > 0 Then chunkPayload = chunkPayload & nl
+            chunkPayload = chunkPayload & CStr(payloads(i))
+        Next i
+        ProgressStep doneCount, total, "Copy tags: writing files"
+        raw = AppleScriptTask("StriderFinderMeta.scpt", "writeCatalogTagsBatch", chunkPayload)
+        doneCount = chunkEnd
+        ProgressStep doneCount, total, "Copy tags: writing files"
+        If Len(raw) = 0 Then
+            failCount = failCount + (chunkEnd - chunkStart + 1)
+        Else
+            lines = Split(raw, nl)
+            For i = LBound(lines) To UBound(lines)
+                If Len(Trim$(lines(i))) = 0 Then GoTo nextStatusLine
+                lineParts = Split(lines(i), vbTab)
+                If UBound(lineParts) >= 0 Then
+                    If lineParts(0) = "ERROR" Then failCount = failCount + 1
+                End If
+nextStatusLine:
+            Next i
+        End If
+    Next chunkStart
+    On Error GoTo 0
+    WriteCatalogTagsBatchPayloads = failCount
     Exit Function
-writeFail:
-    WriteCatalogTagsFromPhotosRow = False
+batchFail:
+    WriteCatalogTagsBatchPayloads = failCount + (total - doneCount)
+#Else
+    WriteCatalogTagsBatchPayloads = total
+#End If
+End Function
+
+' Build write-back blob from a Photos row and write Keywords (True if write OK / nothing to write).
+Private Function WriteCatalogTagsFromPhotosRow(ByVal ws As Worksheet, ByVal rowNum As Long, _
+                                               ByVal path As String) As Boolean
+    Dim blob As String
+    Dim payloads As Collection
+
+    WriteCatalogTagsFromPhotosRow = True
+    blob = BuildCatalogTagBlobFromPhotosRow(ws, rowNum)
+    If Len(blob) = 0 Then Exit Function
+    Set payloads = New Collection
+    payloads.Add path & vbTab & blob
+    If WriteCatalogTagsBatchPayloads(payloads) > 0 Then WriteCatalogTagsFromPhotosRow = False
 End Function
 
 ' Fill Entry auto/camera/sequence fields from a path (no MsgBox). False on failure.

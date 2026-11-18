@@ -1,7 +1,7 @@
 # Striders media catalog — handoff
 
-**Date:** 2026-11-15  
-**For:** Fresh agent — B/T + status-bar progress + friend sharing docs shipped; sequence queue still open below  
+**Date:** 2026-11-16  
+**For:** Fresh agent — T tag-write batched (speed); B/T + status-bar + friend docs shipped; sequence queue still open below  
 **Repo:** `/Users/jim/Development/projects/Striders` (branch `main`)  
 **Day-to-day user guide:** `README.md` (includes “Sequence tagging and bulk import”)  
 **Friend / non-technical setup:** `SETUP_FOR_FRIENDS.txt` (also linked from README “Sharing with another person”)
@@ -33,6 +33,7 @@ Working catalog: `catalog/main catalog/Strider_Media_Catalog.xlsm`. Duplicate th
 - **Status-bar progress (2026-11-15):** Slow macros **B** / **T** / **S** / **Y** use `ProgressBegin` / `ProgressStep` / `ProgressDone` (Excel status bar + wait cursor). Look at the bottom of the Excel window while batches run.
 - **Click-pick after empty Entry stub:** If Option clicks stop filling Entry after a batch, paste `EntrySheet_SelectionChange.txt` / `VideoEntrySheet_SelectionChange.txt` into the sheet modules, or run **`FixEnableEvents`**. Empty stubs break click-pick even when EnableEvents is True.
 - **Sharing docs (2026-11-15):** README “Sharing with another person”; plain-language **`SETUP_FOR_FRIENDS.txt`**. Share blank + macros/scripts, not personal working catalog / `.env`.
+- **T write speed (2026-11-16):** `CopyTagsToSelectedPhotos` batches Keyword writes via `writeCatalogTagsBatch` (chunks of 25) instead of one `AppleScriptTask` per file; exiftool path resolved once per chunk.
 
 ### Already on `main` (earlier)
 
@@ -138,6 +139,7 @@ User priority after 2026-11-13 caption/raw/pixel work: **improve how sequences a
 | Status-bar progress B/T/S/Y | 2026-11-15 | Done | ProgressBegin/Step/Done; wait cursor |
 | Entry/VideoEntry stub paste + FixEnableEvents note | 2026-11-15 | Done | Empty SelectionChange broke click-pick after B |
 | Friend sharing README + SETUP_FOR_FRIENDS.txt | 2026-11-15 | Done | Non-technical install + daily-use guide |
+| T batched Keyword writes | 2026-11-16 | Done | writeCatalogTagsBatch + VBA chunks of 25; re-install helpers + re-import BAS |
 | Sequence handling queue | 2026-11-13 | Next | S1–S6 above — start with user punch-list |
 
 ---

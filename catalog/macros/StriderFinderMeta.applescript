@@ -181,6 +181,47 @@ on writeCatalogTags(payload)
     return my writeTagsToFile(posixPath, tagBlob)
 end writeCatalogTags
 
+-- payload: one or more records separated by newlines; each record is path <tab> blob
+-- (same blob format as writeCatalogTags). Resolves exiftool once for the whole batch.
+-- Returns one status line per record (OK/ERROR), joined by linefeeds.
+on writeCatalogTagsBatch(payload)
+    if payload is "" then return "ERROR" & tab & "No tag payload."
+    set exif to my exiftoolPath()
+    if exif is "" then return "ERROR" & tab & "exiftool not found. Install with Homebrew: brew install exiftool"
+
+    set results to {}
+    set AppleScript's text item delimiters to {return, linefeed}
+    set lines to text items of payload
+    set AppleScript's text item delimiters to ""
+    repeat with ln in lines
+        set t to my trimText(ln as text)
+        if t is not "" then
+            set AppleScript's text item delimiters to tab
+            set parts to text items of t
+            set AppleScript's text item delimiters to ""
+            if (count of parts) < 2 then
+                set end of results to "ERROR" & tab & "Tag payload incomplete."
+            else
+                set posixPath to item 1 of parts
+                if (count of parts) > 2 then
+                    set AppleScript's text item delimiters to tab
+                    set tagBlob to (items 2 thru -1 of parts) as text
+                    set AppleScript's text item delimiters to ""
+                else
+                    set tagBlob to item 2 of parts
+                end if
+                set end of results to my writeTagsToFileWithExif(posixPath, tagBlob, exif)
+            end if
+        end if
+    end repeat
+
+    if (count of results) = 0 then return "ERROR" & tab & "No tag payload."
+    set AppleScript's text item delimiters to linefeed
+    set outText to results as text
+    set AppleScript's text item delimiters to ""
+    return outText
+end writeCatalogTagsBatch
+
 -- payload: posixPath <tab> captionText — merges CAPTION: section; preserves NOTE:.
 on writeCaption(payload)
     if payload is "" then return "ERROR" & tab & "No caption payload."
@@ -199,7 +240,10 @@ on writeCaption(payload)
 end writeCaption
 
 on writeTagsToFile(posixPath, tagBlob)
-    set exif to my exiftoolPath()
+    return my writeTagsToFileWithExif(posixPath, tagBlob, my exiftoolPath())
+end writeTagsToFile
+
+on writeTagsToFileWithExif(posixPath, tagBlob, exif)
     if exif is "" then return "ERROR" & tab & "exiftool not found. Install with Homebrew: brew install exiftool"
 
     try
@@ -218,7 +262,7 @@ on writeTagsToFile(posixPath, tagBlob)
     -- If Entry left Sequence* blank, keep any existing Sequence* keywords on the file
     set preservedSeq to false
     if sequence is "" and sequenceID is "" and sequencePos is "" then
-        set existingSeq to my readSequenceFields(posixPath)
+        set existingSeq to my readSequenceFieldsWithExif(posixPath, exif)
         set sequence to item 1 of existingSeq
         set sequenceID to item 2 of existingSeq
         set sequencePos to item 3 of existingSeq
@@ -276,7 +320,7 @@ on writeTagsToFile(posixPath, tagBlob)
     set AppleScript's text item delimiters to ""
 
     -- Merge NOTE: into Description; preserve CAPTION:
-    set curDesc to my readDescriptionRaw(posixPath)
+    set curDesc to my readDescriptionRawWithExif(posixPath, exif)
     set sections to my parseDescriptionSections(curDesc)
     set keepCaption to item 2 of sections
     set newDesc to my formatDescription(notes, keepCaption)
@@ -305,7 +349,7 @@ on writeTagsToFile(posixPath, tagBlob)
     on error errMsg
         return "ERROR" & tab & errMsg
     end try
-end writeTagsToFile
+end writeTagsToFileWithExif
 
 -- sectionKind: "note" or "caption"; newText is the body (no prefix).
 on mergeDescriptionSection(posixPath, sectionKind, newText)
@@ -341,7 +385,11 @@ on mergeDescriptionSection(posixPath, sectionKind, newText)
 end mergeDescriptionSection
 
 on readDescriptionRaw(posixPath)
-    set exif to my exiftoolPath()
+    return my readDescriptionRawWithExif(posixPath, my exiftoolPath())
+end readDescriptionRaw
+
+on readDescriptionRawWithExif(posixPath, exif)
+    if exif is "" then return ""
     try
         -- Use -b (not -s3): -s3 replaces newlines with "." and would corrupt NOTE/CAPTION splits.
         set raw to do shell script quoted form of exif & " -m -b -MWG:Description " & quoted form of posixPath
@@ -349,7 +397,7 @@ on readDescriptionRaw(posixPath)
     on error
         return ""
     end try
-end readDescriptionRaw
+end readDescriptionRawWithExif
 
 -- Returns {noteBody, captionBody}. Legacy unprefixed text → noteBody.
 on parseDescriptionSections(raw)
@@ -590,10 +638,14 @@ end metadataLine
 
 -- Returns {Sequence, SequenceID, SequencePos} from Keywords/Subject
 on readSequenceFields(posixPath)
-    set exif to my exiftoolPath()
+    return my readSequenceFieldsWithExif(posixPath, my exiftoolPath())
+end readSequenceFields
+
+on readSequenceFieldsWithExif(posixPath, exif)
     set seq to ""
     set seqID to ""
     set seqPos to ""
+    if exif is "" then return {seq, seqID, seqPos}
     try
         set kwRaw to do shell script quoted form of exif & " -m -s3 -Keywords -Subject " & quoted form of posixPath
     on error
@@ -614,7 +666,7 @@ on readSequenceFields(posixPath)
         end if
     end repeat
     return {seq, seqID, seqPos}
-end readSequenceFields
+end readSequenceFieldsWithExif
 
 on videoMetadataLine(posixPath)
     set exif to my exiftoolPath()

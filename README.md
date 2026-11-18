@@ -114,10 +114,12 @@ For hundreds of keepers that are related but not necessarily a full SequenceID e
 1. **Ctrl+Shift+B** (`BatchImportSelectedPhotos`): multi-select stills in **Finder** (preferred for large sets) or open them in **Preview**. Each file becomes a Photos row with camera EXIF / Sequence* / HaveRaw? / VertPix / HorPix only — **no user tags**. Skips RAW; JPEG+RAW pairs use HaveRaw?=Y on the JPEG. Existing rows refresh metadata and keep existing tags.
 2. Tag the **first** related file (Load → click-pick → **W**, or edit that Photos row’s tag cells).
 3. On **Photos**, select the **Name** cells for the related group (include the tagged seed row; active cell’s row is preferred as seed if it has tags).
-4. **Ctrl+Shift+T** (`CopyTagsToSelectedPhotos`): copies user tags (Species, Locale, Rating, caustic fields, notes, …) onto the other selected rows and writes Keywords to each file. Does **not** overwrite Path/Date/camera/Sequence*/HaveRaw?/pixels/Caption.
+4. **Ctrl+Shift+T** (`CopyTagsToSelectedPhotos`): copies user tags (Species, Locale, Rating, caustic fields, notes, …) onto the other selected rows and writes Keywords to each file in **batches** (faster on large selections; watch the Excel status bar). Does **not** overwrite Path/Date/camera/Sequence*/HaveRaw?/pixels/Caption.
 5. Repeat step 2–4 for the next related cluster.
 
 Use **S** when you want every frame of one SequenceID; use **B**+**T** when you selected exactly the files to catalog and will share tags afterward.
+
+After pulling helper/VBA changes: `./scripts/install_mac_helpers.sh`, restart Excel, re-import `CatalogMacros.bas`, run **AssignMacroShortcuts**.
 
 ---
 
