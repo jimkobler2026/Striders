@@ -1,7 +1,7 @@
 # Striders media catalog — handoff
 
-**Date:** 2026-11-16  
-**For:** Fresh agent — T tag-write batched (speed); B/T + status-bar + friend docs shipped; sequence queue still open below  
+**Date:** 2026-11-18  
+**For:** Fresh agent — dual-interval GIF + Fiji crop workflow in progress; next is strider PIP inset on frames; sequence catalog queue still open below  
 **Repo:** `/Users/jim/Development/projects/Striders` (branch `main`)  
 **Day-to-day user guide:** `README.md` (includes “Sequence tagging and bulk import”)  
 **Friend / non-technical setup:** `SETUP_FOR_FRIENDS.txt` (also linked from README “Sharing with another person”)
@@ -34,6 +34,16 @@ Working catalog: `catalog/main catalog/Strider_Media_Catalog.xlsm`. Duplicate th
 - **Click-pick after empty Entry stub:** If Option clicks stop filling Entry after a batch, paste `EntrySheet_SelectionChange.txt` / `VideoEntrySheet_SelectionChange.txt` into the sheet modules, or run **`FixEnableEvents`**. Empty stubs break click-pick even when EnableEvents is True.
 - **Sharing docs (2026-11-15):** README “Sharing with another person”; plain-language **`SETUP_FOR_FRIENDS.txt`**. Share blank + macros/scripts, not personal working catalog / `.env`.
 - **T write speed (2026-11-16):** `CopyTagsToSelectedPhotos` batches Keyword writes via `writeCatalogTagsBatch` (chunks of 25) instead of one `AppleScriptTask` per file; exiftool path resolved once per chunk.
+- **Dual-interval GIF script (2026-11-17):** `scripts/make_dual_interval_gif.py` — Fiji stack/GIF/folder → fixed **3:2** frames (default **1200×800**), `.1s` + `1s` GIFs, concat **fast×3 then slow×1**, loop, lossy40 deliverable next to input. Needs `gifsicle` + Pillow.
+
+### Fiji / sequence GIF working notes (2026-11-17–18; media under Pictures, not in git)
+
+- Test frames: `…/culled 100MSDCF/fiji_test_2/` (and earlier `for fiji test/`).
+- Full-res Sony stills **9504×6336**. Useful crop for this sequence: **6000×4000** centered at **(5550, 3624)** → top-left **(2550, 1624)**; then scale to **2400×1600** in place (same filenames).
+- Close-ups folder: `~/Pictures/close_ups` — normalized to **600×400** (scale-to-fit + black letterbox) for Fiji stack/align/final thumbnail crop.
+- Planned PIP: paste **600×400** (or current insert) on each frame; trial used `insert_strider.jpg` (**300×200**) top-left (+16px) on  
+  `…/for fiji test/sequence combined 3x .1s then 1s 7933_7943.gif` → `… with insert.gif` / `… with insert lossy40.gif`.
+- **Next:** finish aligned close-up thumbnails; composite onto frames (lower-right was original plan; trial was top-left); fold into GIF pipeline if it sticks.
 
 ### Already on `main` (earlier)
 
@@ -140,6 +150,8 @@ User priority after 2026-11-13 caption/raw/pixel work: **improve how sequences a
 | Entry/VideoEntry stub paste + FixEnableEvents note | 2026-11-15 | Done | Empty SelectionChange broke click-pick after B |
 | Friend sharing README + SETUP_FOR_FRIENDS.txt | 2026-11-15 | Done | Non-technical install + daily-use guide |
 | T batched Keyword writes | 2026-11-16 | Done | writeCatalogTagsBatch + VBA chunks of 25; re-install helpers + re-import BAS |
+| Dual-interval GIF script | 2026-11-17 | Done | make_dual_interval_gif.py; 3:2; fast×3 + slow×1 |
+| Fiji crop/resize + close-up prep | 2026-11-17–18 | In progress | 6000×4000@5550,3624→2400; close_ups→600×400; PIP next |
 | Sequence handling queue | 2026-11-13 | Next | S1–S6 above — start with user punch-list |
 
 ---
